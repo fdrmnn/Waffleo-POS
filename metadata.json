@@ -1,0 +1,6 @@
+{
+  "name": "Waffleo POS",
+  "description": "Aplikasi kasir POS tablet landscape untuk bisnis F&B Waffleo (Egg Bubble Waffle & Drinks) dengan manajemen resep, stok bahan, dan audit log cloud.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

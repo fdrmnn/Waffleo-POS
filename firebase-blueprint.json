@@ -1,0 +1,441 @@
+{
+  "entities": {
+    "OrderRecord": {
+      "title": "OrderRecord",
+      "description": "Represents a customer order in Waffleo POS across Active Queue, Done History, and Cancelled History. Deletion is permanently prohibited; orders can only be transitioned to CANCELLED.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Workspace ID or UID of the authenticated Google account."
+        },
+        "orderNumber": {
+          "type": "string",
+          "description": "Human-readable sequential order code."
+        },
+        "sequenceIndex": {
+          "type": "integer",
+          "description": "Queue ordering number so edited orders stay in their original queue position."
+        },
+        "branchId": {
+          "type": "string",
+          "description": "Branch identifier (e.g. Global, Cabang Gabek)."
+        },
+        "orderMedia": {
+          "type": "string",
+          "enum": ["Walk In", "WhatsApp", "Instagram", "GrabFood", "GoFood", "ShopeeFood"],
+          "description": "Order channel determining platform pricing and customer data prefix."
+        },
+        "customerData": {
+          "type": "string",
+          "description": "Customer name or prefixed platform order ID (GF - ..., F - ..., # ...)."
+        },
+        "itemsSummary": {
+          "type": "string",
+          "description": "Readable summary of ordered items and customizations."
+        },
+        "itemsPayload": {
+          "type": "string",
+          "description": "Serialized line items with toppings, half-and-half, flavour, add-ons, sweetness, and ice level."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Special customer instructions."
+        },
+        "promoCode": {
+          "type": "string",
+          "description": "Applied Waffleo promo identifier if any."
+        },
+        "subtotalAmount": {
+          "type": "integer",
+          "description": "Order subtotal in IDR before promo discount."
+        },
+        "discountAmount": {
+          "type": "integer",
+          "description": "Promo discount in IDR."
+        },
+        "totalAmount": {
+          "type": "integer",
+          "description": "Final order total in IDR."
+        },
+        "paidAmount": {
+          "type": "integer",
+          "description": "Total amount already paid by customer in IDR."
+        },
+        "cashReceivedAmount": {
+          "type": "integer",
+          "description": "Actual cash/tendered amount received from customer in IDR."
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Payment method used (Tunai, QRIS, Cash + QRIS, Platform, Belum Bayar)."
+        },
+        "isPaid": {
+          "type": "boolean",
+          "description": "Whether the current totalAmount is fully paid."
+        },
+        "isPrepared": {
+          "type": "boolean",
+          "description": "One-way kitchen preparation status flag (Prepare -> Prepared)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "DONE", "CANCELLED"],
+          "description": "Lifecycle status of the order."
+        },
+        "cancelReason": {
+          "type": "string",
+          "description": "Reason selected when order is cancelled."
+        },
+        "cancelledBy": {
+          "type": "string",
+          "description": "Username and role of staff who cancelled the order."
+        },
+        "cancelledAtText": {
+          "type": "string",
+          "description": "Formatted timestamp when order was cancelled."
+        },
+        "shortfallAmount": {
+          "type": "integer",
+          "description": "Additional payment required after an order edit increases total above paidAmount."
+        },
+        "changeDueAmount": {
+          "type": "integer",
+          "description": "Cash refund/change due to customer after an order edit decreases total below paidAmount."
+        },
+        "splitCashAmount": {
+          "type": "integer",
+          "description": "Cash portion in IDR when using split payment (Cash + QRIS)."
+        },
+        "splitQrisAmount": {
+          "type": "integer",
+          "description": "QRIS portion in IDR when using split payment (Cash + QRIS)."
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Staff username who created or last updated the order."
+        },
+        "paymentLedgerPayload": {
+          "type": "string",
+          "description": "Serialized JSON array of payment ledger entries."
+        },
+        "orderTimelinePayload": {
+          "type": "string",
+          "description": "Serialized JSON array of order timeline events."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server or backdated timestamp when order was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when order was last updated."
+        }
+      },
+      "required": [
+        "userId",
+        "orderNumber",
+        "sequenceIndex",
+        "branchId",
+        "orderMedia",
+        "customerData",
+        "itemsSummary",
+        "itemsPayload",
+        "notes",
+        "promoCode",
+        "subtotalAmount",
+        "discountAmount",
+        "totalAmount",
+        "paidAmount",
+        "paymentMethod",
+        "isPaid",
+        "isPrepared",
+        "status",
+        "cancelReason",
+        "cancelledBy",
+        "cancelledAtText",
+        "shortfallAmount",
+        "changeDueAmount",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CatalogRecord": {
+      "title": "CatalogRecord",
+      "description": "Stores editable POS master data: Menu items (Egg Waffle toppings, Drinks), Modifiers (Flavour, Add-on, Sweetness, Ice), Ingredients, Promos, and Branch configs.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Workspace ID or UID of the authenticated Google account."
+        },
+        "recordType": {
+          "type": "string",
+          "enum": ["MENU_ITEM", "MODIFIER", "INGREDIENT", "PROMO", "BRANCH_CONFIG"],
+          "description": "Type of master catalog entity."
+        },
+        "branchId": {
+          "type": "string",
+          "description": "Branch scope (e.g. Global, Cabang Gabek)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the menu item, modifier, ingredient, promo, or branch."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category or group (e.g. Egg Waffle, Drinks, FLAVOUR, ADD_ON, SWEETNESS, ICE, RAW_MATERIAL)."
+        },
+        "priceWalkIn": {
+          "type": "integer",
+          "description": "Base Walk-In price in IDR."
+        },
+        "priceGrabFood": {
+          "type": "integer",
+          "description": "GrabFood platform price in IDR."
+        },
+        "priceGoFood": {
+          "type": "integer",
+          "description": "GoFood platform price in IDR."
+        },
+        "priceShopeeFood": {
+          "type": "integer",
+          "description": "ShopeeFood platform price in IDR."
+        },
+        "stockQty": {
+          "type": "number",
+          "description": "Current ingredient stock quantity."
+        },
+        "stockUnit": {
+          "type": "string",
+          "description": "Unit of measure for ingredient stock (gram, ml, pcs, butir)."
+        },
+        "costPerUnit": {
+          "type": "integer",
+          "description": "Cost per unit in IDR for HPP calculation."
+        },
+        "metadataJson": {
+          "type": "string",
+          "description": "Structured metadata (subCategory, recipe BOM links, promo rules, or branch configs)."
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether this item/option is active and selectable in POS."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "recordType",
+        "branchId",
+        "name",
+        "category",
+        "priceWalkIn",
+        "priceGrabFood",
+        "priceGoFood",
+        "priceShopeeFood",
+        "stockQty",
+        "stockUnit",
+        "costPerUnit",
+        "metadataJson",
+        "isActive",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLogRecord": {
+      "title": "AuditLogRecord",
+      "description": "Immutable append-only audit trail recording all data creations, edits, cancellations, stock deductions, and store status changes.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Workspace ID or UID of the authenticated Google account."
+        },
+        "branchId": {
+          "type": "string",
+          "description": "Branch where the action occurred."
+        },
+        "actorUsername": {
+          "type": "string",
+          "description": "Staff username who performed the action."
+        },
+        "actorRole": {
+          "type": "string",
+          "description": "Role of the staff member (Developer, Owner, Supervisor, Kasir)."
+        },
+        "actionType": {
+          "type": "string",
+          "description": "Action code (e.g. ORDER_CREATED, ORDER_EDITED, ORDER_CANCELLED, ORDER_DONE, CATALOG_UPDATED, BRANCH_CREATED, STORE_STATUS)."
+        },
+        "entityId": {
+          "type": "string",
+          "description": "ID of the affected entity."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Human-readable description of the change."
+        },
+        "beforeSnapshot": {
+          "type": "string",
+          "description": "Snapshot of the data before change."
+        },
+        "afterSnapshot": {
+          "type": "string",
+          "description": "Snapshot of the data after change."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the event."
+        }
+      },
+      "required": [
+        "userId",
+        "branchId",
+        "actorUsername",
+        "actorRole",
+        "actionType",
+        "entityId",
+        "summary",
+        "beforeSnapshot",
+        "afterSnapshot",
+        "createdAt"
+      ]
+    },
+    "MoneyTransactionDoc": {
+      "title": "MoneyTransactionDoc",
+      "description": "Real-time cloud-synced Money Manager transaction record (Income, Expense, Transfer).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "branchId": { "type": "string" },
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE", "TRANSFER"] },
+        "timestampMillis": { "type": "integer" },
+        "dateKey": { "type": "string" },
+        "monthKey": { "type": "string" },
+        "timeFormatted": { "type": "string" },
+        "amount": { "type": "integer" },
+        "transferFee": { "type": "integer" },
+        "category": { "type": "string" },
+        "subCategory": { "type": "string" },
+        "accountGroup": { "type": "string" },
+        "accountName": { "type": "string" },
+        "toAccountGroup": { "type": "string" },
+        "toAccountName": { "type": "string" },
+        "note": { "type": "string" },
+        "description": { "type": "string" },
+        "tag": { "type": "string" },
+        "repetition": { "type": "string" },
+        "isAutoPosSync": { "type": "boolean" },
+        "posSyncKey": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "branchId", "type", "dateKey", "monthKey", "amount", "accountGroup", "accountName"]
+    },
+    "StaffAccountDoc": {
+      "title": "StaffAccountDoc",
+      "description": "Real-time cloud-synced branch staff account credentials and role.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "branchId": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["DEVELOPER", "OWNER", "SUPERVISOR", "KASIR"] },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "branchId", "username", "password", "role", "displayName"]
+    },
+    "BranchProfileDoc": {
+      "title": "BranchProfileDoc",
+      "description": "Real-time cloud-synced multi-branch metadata created by Developer so all devices discover every branch (e.g. Global, Cabang Gabek).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "branchId": { "type": "string" },
+        "location": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "ownerEmail": { "type": "string" },
+        "ownerPhone": { "type": "string" },
+        "ownerUsername": { "type": "string" },
+        "initializedFrom": { "type": "string" },
+        "createdAtText": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "branchId", "location", "ownerName", "ownerUsername", "initializedFrom", "createdAtText"]
+    },
+    "WorkspaceSettingsDoc": {
+      "title": "WorkspaceSettingsDoc",
+      "description": "Real-time cloud-synced POS workspace settings (bank accounts, digital wallets, custom categories/subcategories, store operational state).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "settingKey": { "type": "string" },
+        "payloadJson": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "settingKey", "payloadJson"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/orders/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/OrderRecord"
+      },
+      "description": "POS orders collection storing Active, Done, and Cancelled orders. Delete is permanently blocked."
+    },
+    "/users/{userId}/catalog/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/CatalogRecord"
+      },
+      "description": "POS master catalog storing menu items, modifiers, ingredients, promos, and branch configs."
+    },
+    "/users/{userId}/audit_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/AuditLogRecord"
+      },
+      "description": "Append-only cloud audit trail."
+    },
+    "/users/{userId}/money_transactions/{txId}": {
+      "schema": {
+        "$ref": "#/entities/MoneyTransactionDoc"
+      },
+      "description": "Cloud-synced Money Manager transactions."
+    },
+    "/users/{userId}/staff_accounts/{accId}": {
+      "schema": {
+        "$ref": "#/entities/StaffAccountDoc"
+      },
+      "description": "Cloud-synced branch staff accounts."
+    },
+    "/users/{userId}/branch_profiles/{branchDocId}": {
+      "schema": {
+        "$ref": "#/entities/BranchProfileDoc"
+      },
+      "description": "Cloud-synced branch profiles so any device can discover and log into any branch."
+    },
+    "/users/{userId}/workspace_settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/WorkspaceSettingsDoc"
+      },
+      "description": "Cloud-synced POS settings (banks, digital wallets, custom categories, store status)."
+    }
+  }
+}
