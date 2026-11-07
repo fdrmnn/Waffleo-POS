@@ -50,7 +50,7 @@ object WaffleoSeedData {
         ),
         StaffAccount(
             branchId = "Global",
-            username = "kasir",
+            username = "kasir2",
             password = "kasir123",
             role = StaffRole.KASIR,
             displayName = "Kasir Utama Global (Alias)",

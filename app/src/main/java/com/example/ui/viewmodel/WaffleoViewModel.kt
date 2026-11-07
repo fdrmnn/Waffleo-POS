@@ -377,7 +377,7 @@ class WaffleoViewModel(
         } else {
             _localSeededCatalog
         }
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _localSeededCatalog.value)
+    ).stateIn(viewModelScope, SharingStarted.Eagerly, _localSeededCatalog.value)
 
     private fun resolveCategorySortRank(rec: CatalogRecord): Int {
         val menuCats = try { _customMenuCategories.value } catch (_: Throwable) { listOf("Egg Waffle", "Drinks") }
@@ -412,7 +412,7 @@ class WaffleoViewModel(
         }.sortedWith(catalogItemComparator())
     }.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5000L),
+        SharingStarted.Eagerly,
         _localSeededCatalog.value
             .filter { rec ->
                 if (rec.recordType == "PROMO") {
@@ -470,11 +470,11 @@ class WaffleoViewModel(
         } else {
             _localOrders
         }
-    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _localOrders.value.filter { it.orderNumber != "WFL-001" && it.id != "WFL-001" })
+    ).stateIn(viewModelScope, SharingStarted.Eagerly, _localOrders.value.filter { it.orderNumber != "WFL-001" && it.id != "WFL-001" })
 
     val orders: StateFlow<List<OrderRecord>> = combine(allOrders, _session) { list, sess ->
         list.filter { isSameBranch(it.branchId, sess.branchId) }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val auditLogs: StateFlow<List<AuditLogRecord>> = (
         if (isCloudAuthenticated) {
@@ -502,7 +502,7 @@ class WaffleoViewModel(
         }
     ).combine(_session) { list, sess ->
         list.filter { isSameBranch(it.branchId, sess.branchId) }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun getBranchDisplayName(branchId: String): String {
         if (branchId.isBlank() || branchId.equals("Global", ignoreCase = true)) return "Global"
@@ -520,7 +520,7 @@ class WaffleoViewModel(
                 return u.replaceFirstChar { it.uppercaseChar() }
             }
         }
-        if (branchId.contains("-") && branchId.length > 20) {
+        if (branchId.contains("gabek", ignoreCase = true)) {
             return "Gabek"
         }
         val clean = branchId.removePrefix("branch_").replace("_", " ").trim()
@@ -745,7 +745,7 @@ class WaffleoViewModel(
                 .thenByDescending { it.timeText }
                 .thenByDescending { it.id }
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _allMoneyTransactions.value)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, _allMoneyTransactions.value)
 
     val dailyPosItemSummaryMap: StateFlow<Map<String, String>> = combine(
         orders,
@@ -787,14 +787,14 @@ class WaffleoViewModel(
         }
 
         map
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     val moneyBookmarks: StateFlow<List<MoneyBookmarkRecord>> = combine(
         _allMoneyBookmarks,
         _session
     ) { list, sess ->
         list.filter { it.branchId.equals(sess.branchId, ignoreCase = true) }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), _allMoneyBookmarks.value)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, _allMoneyBookmarks.value)
 
     // Dynamic Custom Categories & Modifier-to-Menu Mapping (Declared BEFORE init to prevent NPE)
     private fun cleanCategoryTitle(raw: String): String {
@@ -2712,6 +2712,9 @@ class WaffleoViewModel(
 
     // --- SUBMIT CART TO ORDERS OR APPLY ORDER EDIT ---
 
+    private val isSubmittingCart = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val inFlightOrderActionIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     fun submitCartToOrders(onValidationError: (String) -> Unit, onSuccess: () -> Unit) {
         if (!_isStoreOpen.value) {
             onValidationError("Toko sedang tutup. Buka toko terlebih dahulu untuk melakukan transaksi.")
@@ -2727,6 +2730,9 @@ class WaffleoViewModel(
         val suffix = _customerInputSuffix.value.trim()
         if (media.requiresCustomerCode && suffix.isEmpty()) {
             onValidationError("Nomor kode pesanan ${media.label} (${media.prefix}...) wajib diisi!")
+            return
+        }
+        if (!isSubmittingCart.compareAndSet(false, true)) {
             return
         }
 
@@ -2762,6 +2768,7 @@ class WaffleoViewModel(
         val currentEditing = _editingOrder.value
 
         viewModelScope.launch {
+            try {
             if (currentEditing == null) {
                 // CREATE NEW ORDER (Daily counter per branch: Cloud format WFL-BRANCH-YYYYMMDD-001, App display WFL-001)
                 val isBackdatedCart = _cartIsBackdated.value && _session.value.role.canInputBackdatedOrder
@@ -2776,10 +2783,11 @@ class WaffleoViewModel(
                 val dateStr = dateFmt.format(Date(nowMs))
                 val todayStr = dateKeyFmt.format(Date(nowMs))
 
-                val todayBranchOrders = allOrders.value.filter { ord ->
+                val combinedKnownOrders = (allOrders.value + _localOrders.value).distinctBy { it.id }
+                val todayBranchOrders = combinedKnownOrders.filter { ord ->
                     isSameBranch(ord.branchId, activeBranch) &&
                     ord.orderNumber != "WFL-001" &&
-                    ord.createdAt?.toDate()?.let { dateKeyFmt.format(it) } == todayStr
+                    dateKeyFmt.format(resolveOrderTimestampDate(ord)) == todayStr
                 }
                 val maxInOrdersToday = todayBranchOrders.maxOfOrNull { it.sequenceIndex } ?: 0L
                 val maxRecordedDaily = localStore?.getHighestRecordedDailyOrderSeq(normActiveBranch, dateStr) ?: 0L
@@ -3036,8 +3044,8 @@ class WaffleoViewModel(
                 onSuccess()
             } else {
                 // APPLY CHANGES TO EXISTING EDITED ORDER (Preserving sequenceIndex!)
-                val previousPaid = maxOf(currentEditing.paidAmount, if (_cartIsPaid.value) _cartPaidAmount.value else 0L)
-                val wasPaidBefore = currentEditing.isPaid || _cartIsPaid.value
+                val previousPaid = maxOf(currentEditing.paidAmount, _cartPaidAmount.value)
+                val wasPaidBefore = currentEditing.isPaid || _cartIsPaid.value || previousPaid > 0L
 
                 val isStillPaid: Boolean
                 val shortfall: Long
@@ -3093,7 +3101,11 @@ class WaffleoViewModel(
                     System.currentTimeMillis()
                 }
                 val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
-                val ledger = currentEditing.getPaymentLedger().toMutableList()
+                val ledger = if (_cartPaymentLedger.value.isNotEmpty()) {
+                    _cartPaymentLedger.value.toMutableList()
+                } else {
+                    currentEditing.getPaymentLedger().toMutableList()
+                }
                 val timeline = currentEditing.getTimelineEvents().toMutableList()
 
                 // Bootstrap initial timeline & payment if empty
@@ -3170,7 +3182,8 @@ class WaffleoViewModel(
                     )
                 )
 
-                if (changeDue > 0L) {
+                val incrementalChangeDue = (changeDue - currentEditing.changeDueAmount).coerceAtLeast(0L)
+                if (incrementalChangeDue > 0L) {
                     ledger.add(
                         OrderPaymentLedgerEntry(
                             paymentId = "pay_${nowMs}_${UUID.randomUUID().toString().take(4)}",
@@ -3178,7 +3191,7 @@ class WaffleoViewModel(
                             timeText = nowText,
                             paymentType = "CHANGE_REFUND_RETURN",
                             paymentMethod = "Tunai (Kembalian)",
-                            amount = changeDue,
+                            amount = incrementalChangeDue,
                             cashierUsername = _session.value.username,
                             note = "Pengembalian kembalian uang tunai ke customer akibat perubahan pesanan"
                         )
@@ -3192,9 +3205,15 @@ class WaffleoViewModel(
                             actorUsername = _session.value.username,
                             actorRole = _session.value.role.label,
                             title = "Kembalian Tunai Diserahkan",
-                            description = "Diserahkan kembalian uang tunai ${formatIdr(changeDue)} kepada customer oleh ${_session.value.username}."
+                            description = "Diserahkan kembalian uang tunai ${formatIdr(incrementalChangeDue)} kepada customer oleh ${_session.value.username}."
                         )
                     )
+                }
+
+                val resolvedEditMethod = when {
+                    media.isPlatform -> media.defaultSettlementMethod
+                    effectivePaidAmount > 0L -> if (_cartPaymentMethod.value != "Belum Bayar") _cartPaymentMethod.value else currentEditing.paymentMethod
+                    else -> "Belum Bayar"
                 }
 
                 val updatedOrder = currentEditing.copy(
@@ -3208,14 +3227,12 @@ class WaffleoViewModel(
                     discountAmount = discount,
                     totalAmount = newTotal,
                     paidAmount = effectivePaidAmount,
-                    paymentMethod = when {
-                        media.isPlatform -> media.defaultSettlementMethod
-                        effectivePaidAmount > 0L -> if (_cartPaymentMethod.value != "Belum Bayar") _cartPaymentMethod.value else currentEditing.paymentMethod
-                        else -> "Belum Bayar"
-                    },
+                    paymentMethod = resolvedEditMethod,
                     isPaid = isStillPaid,
                     shortfallAmount = shortfall,
                     changeDueAmount = changeDue,
+                    splitCashAmount = if (_cartSplitCash.value > 0L) _cartSplitCash.value else currentEditing.splitCashAmount,
+                    splitQrisAmount = if (_cartSplitQris.value > 0L) _cartSplitQris.value else currentEditing.splitQrisAmount,
                     createdBy = _session.value.username,
                     paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(ledger),
                     orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
@@ -3256,6 +3273,9 @@ class WaffleoViewModel(
                 _currentDestination.value = MainNavDestination.ORDERS
                 showBanner(feedbackMsg)
                 onSuccess()
+            }
+            } finally {
+                isSubmittingCart.set(false)
             }
         }
     }
@@ -3318,7 +3338,12 @@ class WaffleoViewModel(
         changeAmount: Long = 0L,
         cashTendered: Long = 0L
     ) {
+        val actionKey = "pay:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
+            try {
+            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+            if (latestOrder.isPaid && latestOrder.shortfallAmount <= 0L) return@launch
             val nowMs = resolveOrderActionTimestampMillis(order)
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val ledger = order.getPaymentLedger().toMutableList()
@@ -3480,6 +3505,9 @@ class WaffleoViewModel(
                 customTimestampMillis = nowMs
             )
             showBanner("Pesanan ${order.orderNumber} dinyatakan LUNAS (Paid).")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
@@ -3488,7 +3516,12 @@ class WaffleoViewModel(
      */
     fun markOrderPreparedOneWay(order: OrderRecord) {
         if (order.isPrepared) return
+        val actionKey = "prepare:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
+            try {
+            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+            if (latestOrder.isPrepared) return@launch
             val nowMs = resolveOrderActionTimestampMillis(order)
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val timeline = order.getTimelineEvents().toMutableList()
@@ -3538,6 +3571,9 @@ class WaffleoViewModel(
                 customTimestampMillis = nowMs
             )
             showBanner("Pesanan ${order.orderNumber} telah selesai dibuat (Prepared).")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
@@ -3552,7 +3588,12 @@ class WaffleoViewModel(
             showBanner("Pesanan harus berstatus Paid dan Prepared sebelum tombol Done! dapat ditekan.")
             return
         }
+        val actionKey = "done:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
+            try {
+            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+            if (latestOrder.status == "DONE" || latestOrder.status == "CANCELLED" || latestOrder.status == "ERASED") return@launch
             val nowMs = resolveOrderActionTimestampMillis(order)
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val timeline = order.getTimelineEvents().toMutableList()
@@ -3643,11 +3684,19 @@ class WaffleoViewModel(
             }
 
             showBanner("Pesanan ${order.orderNumber} Selesai (Done!) & dipindahkan ke Order History.")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
     fun cancelOrderWithReason(order: OrderRecord, reason: String) {
+        val actionKey = "cancel:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
+            try {
+            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+            if (latestOrder.status == "CANCELLED" || latestOrder.status == "ERASED") return@launch
             val nowMs = resolveOrderActionTimestampMillis(order)
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val actorInfo = "${_session.value.username} (${_session.value.role.label})"
@@ -3728,6 +3777,9 @@ class WaffleoViewModel(
                 syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
             }
             showBanner("Pesanan ${order.orderNumber} dibatalkan dan dipindahkan ke Riwayat Dibatalkan.")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
@@ -3744,8 +3796,13 @@ class WaffleoViewModel(
             showBanner("Hanya akun Owner yang memiliki wewenang untuk menghapus pesanan.")
             return
         }
+        val actionKey = "erase:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
 
         viewModelScope.launch {
+            try {
+            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+            if (latestOrder.status == "ERASED") return@launch
             val nowMs = System.currentTimeMillis()
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val actorInfo = "${_session.value.username} (${_session.value.role.label})"
@@ -3822,6 +3879,9 @@ class WaffleoViewModel(
             syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
 
             showBanner("Pesanan ${order.orderNumber} berhasil dihapus dari daftar penjualan aktif dan dipindahkan ke 'Erased - Dihapus'.")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
@@ -3830,7 +3890,31 @@ class WaffleoViewModel(
             showBanner("Hanya Owner atau Developer yang dapat menghapus pesanan secara permanen.")
             return
         }
+        val actionKey = "delete:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
+            try {
+            if (order.status == "DONE") {
+                val lineItems = CartLineItem.deserializeList(order.itemsPayload)
+                val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
+                val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
+                val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
+                currentIngredients.forEach { ing ->
+                    val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
+                    val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
+                    val perDrink = meta.optDouble("usagePerDrink", 0.0)
+                    val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
+                    if (usedQty > 0.0) {
+                        val updatedIng = ing.copy(stockQty = ing.stockQty + usedQty)
+                        updateLocalSeedCatalogItem(updatedIng)
+                        syncCatalogItemToCloud(updatedIng)
+                    }
+                }
+            }
+            if (order.status != "CANCELLED" && order.status != "ERASED" && order.discountAmount > 0L && order.promoCode.isNotBlank()) {
+                restorePromoQuotaForOrder(order)
+            }
+
             val updatedLocal = _localOrders.value.filterNot { it.id == order.id }
             _localOrders.value = updatedLocal
             localStore?.saveOrders(updatedLocal)
@@ -3843,6 +3927,11 @@ class WaffleoViewModel(
                 repository.deleteOrder(workspaceId, order.id)
                 clearPendingSyncKey(delKey)
             }
+
+            val ordDate = resolveOrderTimestampDate(order)
+            val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
+            syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
+
             logAuditEvent(
                 actionType = "ORDER_DELETED_PERMANENT",
                 entityId = order.id,
@@ -3851,6 +3940,9 @@ class WaffleoViewModel(
                 afterSnapshot = "{}"
             )
             showBanner("Pesanan ${order.orderNumber} berhasil dihapus permanen.")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
         }
     }
 
@@ -5537,22 +5629,39 @@ class WaffleoViewModel(
     fun syncPosSalesToMoneyManager(silent: Boolean = false, triggeredByStoreClose: Boolean = false) {
         val activeBranch = _session.value.branchId
 
-        // When closing the store, finalize any paid ACTIVE non-backdated orders into DONE so the daily shift queue is cleanly settled
+        // When closing the store, finalize any paid & prepared ACTIVE non-backdated orders into DONE synchronously and deduct stock so the daily shift queue is cleanly settled
         if (triggeredByStoreClose) {
-            val activePaidOrders = orders.value.filter {
-                it.status == "ACTIVE" && it.isPaid && !isBackdatedOrder(it)
+            val activePaidPreparedOrders = orders.value.filter {
+                it.status == "ACTIVE" && it.isPaid && it.isPrepared && !isBackdatedOrder(it)
             }
-            if (activePaidOrders.isNotEmpty()) {
-                viewModelScope.launch {
-                    activePaidOrders.forEach { ord ->
-                        val finalized = ord.copy(
-                            isPrepared = true,
-                            status = "DONE",
-                            shortfallAmount = 0L,
-                            changeDueAmount = 0L
-                        )
-                        updateLocalOrderItem(finalized)
-                        syncOrderToCloud(finalized, isNew = false)
+            if (activePaidPreparedOrders.isNotEmpty()) {
+                val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }.toMutableList()
+                activePaidPreparedOrders.forEach { ord ->
+                    val finalized = ord.copy(
+                        isPrepared = true,
+                        status = "DONE",
+                        shortfallAmount = 0L,
+                        changeDueAmount = 0L
+                    )
+                    updateLocalOrderItem(finalized)
+                    syncOrderToCloud(finalized, isNew = false)
+
+                    val lineItems = CartLineItem.deserializeList(ord.itemsPayload)
+                    val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
+                    val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
+                    for (idx in currentIngredients.indices) {
+                        val ing = currentIngredients[idx]
+                        val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
+                        val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
+                        val perDrink = meta.optDouble("usagePerDrink", 0.0)
+                        val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
+                        if (usedQty > 0.0) {
+                            val newStock = (ing.stockQty - usedQty).coerceAtLeast(0.0)
+                            val updatedIng = ing.copy(stockQty = newStock)
+                            currentIngredients[idx] = updatedIng
+                            updateLocalSeedCatalogItem(updatedIng)
+                            syncCatalogItemToCloud(updatedIng)
+                        }
                     }
                 }
             }
@@ -5699,7 +5808,10 @@ class WaffleoViewModel(
         // Handle non-cash cancelled orders that were paid: cash was refunded to buyer, so record Transfer From Cash To Bank Account
         if (triggeredByStoreClose) {
             val cancelledPaidOnDate = orders.value.filter { ord ->
-                ord.status == "CANCELLED" && ord.isPaid && ord.totalAmount > 0L &&
+                val isPureCash = (ord.paymentMethod.contains("Tunai", ignoreCase = true) || ord.paymentMethod.contains("Cash", ignoreCase = true)) &&
+                    !ord.paymentMethod.contains("QRIS", ignoreCase = true) &&
+                    !ord.paymentMethod.contains("Transfer", ignoreCase = true)
+                ord.status == "CANCELLED" && ord.isPaid && ord.totalAmount > 0L && !isPureCash &&
                     dateFmt.format(resolveOrderTimestampDate(ord)) == targetDateKey
             }
             cancelledPaidOnDate.forEach { cOrd ->
@@ -5722,7 +5834,7 @@ class WaffleoViewModel(
                         transferFee = 0L,
                         category = "Transfer",
                         subCategory = "Transfer Dana",
-                        accountGroup = "Kas",
+                        accountGroup = "Uang Tunai",
                         accountName = "Cash",
                         toAccountGroup = "Bank",
                         toAccountName = targetBank,

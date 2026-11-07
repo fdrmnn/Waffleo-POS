@@ -882,7 +882,8 @@ data class BranchProfile(
         get() = when {
             name.isNotBlank() -> name
             branchId.equals("Global", ignoreCase = true) -> "Global"
-            else -> "Gabek"
+            branchId.contains("gabek", ignoreCase = true) -> "Gabek"
+            else -> branchId.removePrefix("branch_").replace("_", " ").trim().ifBlank { branchId }
         }
 }
 

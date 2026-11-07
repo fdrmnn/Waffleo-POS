@@ -634,10 +634,11 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                     } ?: continue
                     val docsToDelete = snap.documents.filter { doc ->
                         val docBranch = doc.getString("branchId")
-                        val isSlugMatch = sub == "catalog" && (
-                            (slugPrefix.length > 1 && doc.id.lowercase().startsWith(slugPrefix)) ||
-                            doc.id.lowercase().contains(baseSlug)
-                        )
+                        val isSlugMatch = sub == "catalog" && docBranch.isNullOrBlank() &&
+                            slugPrefix.length > 1 && (
+                                doc.id.lowercase().startsWith(slugPrefix) ||
+                                    doc.id.lowercase().startsWith("cat_$slugPrefix")
+                            )
                         matchesBranch(docBranch) || isSlugMatch
                     }
                     batchDeleteDocs(docsToDelete)

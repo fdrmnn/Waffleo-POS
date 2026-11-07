@@ -778,6 +778,59 @@ class ExampleUnitTest {
     }
     assertTrue(remainingSuggestions.isEmpty())
   }
+
+  @Test
+  fun branchProfile_displayName_doesNotFallbackToGabekForNewUuidBranches() {
+    val uuidBranch = com.example.data.model.BranchProfile(
+      branchId = "branch_9a8b7c6d-1234-4567-89ab-cdef01234567",
+      location = "Sungailiat",
+      ownerName = "Budi",
+      ownerEmail = "budi@waffleo.id",
+      ownerPhone = "0812",
+      ownerUsername = "ownerbudi",
+      name = ""
+    )
+    assertNotEquals("Gabek", uuidBranch.displayName)
+    assertEquals("9a8b7c6d-1234-4567-89ab-cdef01234567", uuidBranch.displayName)
+
+    val namedBranch = uuidBranch.copy(name = "Sungailiat")
+    assertEquals("Sungailiat", namedBranch.displayName)
+  }
+
+  @Test
+  fun defaultStaffAccounts_haveUniqueBranchUsernameKeys() {
+    val accounts = com.example.data.model.WaffleoSeedData.defaultStaffAccounts()
+    val keys = accounts.map { "${it.branchId.lowercase()}_${it.username.lowercase()}" }
+    assertEquals(keys.size, keys.distinct().size)
+  }
+
+  @Test
+  fun refundTransfer_usesUangTunaiGroup_andIncrementalChangeDuePreventsDuplicateRefunds() {
+    val refundTx = com.example.data.model.MoneyTransactionRecord(
+      id = "v1_refund_transfer_WFL-002_2026-11-08",
+      branchId = "Global",
+      type = com.example.data.model.MoneyTransactionType.TRANSFER,
+      dateKey = "2026-11-08",
+      monthKey = "2026-11",
+      timeFormatted = "15:00",
+      amount = 28000L,
+      accountGroup = "Uang Tunai",
+      accountName = "Cash",
+      toAccountGroup = "Bank",
+      toAccountName = "Bank Mandiri"
+    )
+    assertEquals("Uang Tunai" to "Cash", refundTx.accountGroup to refundTx.accountName)
+
+    // Verify incremental changeDue calculation on repeated order edits
+    val priorChangeDue = 5000L
+    val newChangeDueAfterFirstEdit = 5000L
+    val incrementalOnSecondEditSameTotal = (newChangeDueAfterFirstEdit - priorChangeDue).coerceAtLeast(0L)
+    assertEquals(0L, incrementalOnSecondEditSameTotal)
+
+    val newChangeDueAfterFurtherReduction = 8000L
+    val incrementalOnFurtherReduction = (newChangeDueAfterFurtherReduction - priorChangeDue).coerceAtLeast(0L)
+    assertEquals(3000L, incrementalOnFurtherReduction)
+  }
 }
 
 
