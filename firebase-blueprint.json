@@ -221,6 +221,10 @@
           "type": "string",
           "description": "Structured metadata (subCategory, recipe BOM links, promo rules, or branch configs)."
         },
+        "imageUrl": {
+          "type": "string",
+          "description": "Product illustration key or URL synced across devices."
+        },
         "isActive": {
           "type": "boolean",
           "description": "Whether this item/option is active and selectable in POS."
@@ -342,6 +346,7 @@
         "isAutoPosSync": { "type": "boolean" },
         "posSyncKey": { "type": "string" },
         "createdBy": { "type": "string" },
+        "feeAccountChoice": { "type": "string", "enum": ["FROM", "TO"] },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "branchId", "type", "dateKey", "monthKey", "amount", "accountGroup", "accountName"]
@@ -370,6 +375,7 @@
       "properties": {
         "userId": { "type": "string" },
         "branchId": { "type": "string" },
+        "name": { "type": "string" },
         "location": { "type": "string" },
         "ownerName": { "type": "string" },
         "ownerEmail": { "type": "string" },

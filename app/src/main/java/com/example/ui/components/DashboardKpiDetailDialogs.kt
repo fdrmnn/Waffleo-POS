@@ -343,6 +343,17 @@ fun DashboardLabaKotorDialog(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        if (totalDiskonPromo > 0L) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Subtotal Penjualan (Sebelum Promo):", style = MaterialTheme.typography.bodyMedium, color = MutedCocoaText)
+                                Text(WaffleoViewModel.formatIdr(omzetGross + totalDiskonPromo), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MutedCocoaText)
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Total Diskon Promo Toko:", style = MaterialTheme.typography.bodyMedium, color = DeepCaramelGold)
+                                Text("-${WaffleoViewModel.formatIdr(totalDiskonPromo)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = DeepCaramelGold)
+                            }
+                        }
+
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Total Omzet Penjualan (Gross):", style = MaterialTheme.typography.bodyMedium, color = RichEspressoPrimary)
                             Text(WaffleoViewModel.formatIdr(omzetGross), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = RichEspressoPrimary)
@@ -351,13 +362,6 @@ fun DashboardLabaKotorDialog(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Potongan Komisi Platform Online:", style = MaterialTheme.typography.bodyMedium, color = TerracottaDanger)
                             Text("-${WaffleoViewModel.formatIdr(potonganPlatform)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = TerracottaDanger)
-                        }
-
-                        if (totalDiskonPromo > 0L) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Total Diskon Promo Toko:", style = MaterialTheme.typography.bodyMedium, color = DeepCaramelGold)
-                                Text("-${WaffleoViewModel.formatIdr(totalDiskonPromo)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = DeepCaramelGold)
-                            }
                         }
 
                         HorizontalDivider(color = SoftOatSurface, thickness = 1.dp, modifier = Modifier.padding(vertical = 4.dp))

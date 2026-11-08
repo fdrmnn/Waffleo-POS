@@ -47,6 +47,11 @@ data class OrderRecord(
     fun getTimelineEvents(): List<OrderTimelineEvent> = OrderTimelineEvent.deserializeList(orderTimelinePayload)
 
     @get:com.google.firebase.firestore.Exclude
+    val parsedLineItems: List<CartLineItem> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        CartLineItem.deserializeList(itemsPayload)
+    }
+
+    @get:com.google.firebase.firestore.Exclude
     val displayOrderNumber: String
         get() {
             if (orderNumber.isBlank()) return "WFL-000"
@@ -827,7 +832,8 @@ data class MoneyTransactionRecord(
     val repetition: String = "None",
     val isAutoPosSync: Boolean = false,
     val posSyncKey: String = "",
-    val createdBy: String = "owner"
+    val createdBy: String = "owner",
+    val feeAccountChoice: String = "FROM"
 ) {
     val categoryName: String get() = category
     val subCategoryName: String get() = subCategory
@@ -894,6 +900,99 @@ fun isUuidOrInternalBranchId(raw: String): Boolean {
     return false
 }
 
+object BranchNameRegistry {
+    private val idToDisplayName = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun normalizeBranchToken(raw: String): String {
+        return raw.trim()
+            .removePrefix("Cabang ")
+            .removePrefix("cabang ")
+            .trim()
+            .lowercase()
+            .removePrefix("branch_")
+            .removePrefix("branch")
+            .replace("-", "")
+            .replace("_", "")
+            .trim()
+    }
+
+    fun registerBranch(branchId: String, displayName: String) {
+        val cleanId = branchId.trim().lowercase()
+        val cleanName = displayName.trim()
+            .removePrefix("Cabang ")
+            .removePrefix("cabang ")
+            .trim()
+        if (cleanId.isNotBlank() && cleanName.isNotBlank() && !isUuidOrInternalBranchId(cleanName)) {
+            idToDisplayName[cleanId] = cleanName
+            val stripped = cleanId.removePrefix("cabang ").trim()
+            if (stripped.isNotBlank()) {
+                idToDisplayName[stripped] = cleanName
+            }
+            val normalizedToken = normalizeBranchToken(cleanId)
+            if (normalizedToken.isNotBlank()) {
+                idToDisplayName[normalizedToken] = cleanName
+            }
+        }
+    }
+
+    fun registerAll(profiles: List<BranchProfile>) {
+        profiles.forEach { profile ->
+            val candidateName = profile.name.ifBlank {
+                if (!isUuidOrInternalBranchId(profile.branchId)) profile.branchId else ""
+            }
+            if (candidateName.isNotBlank()) {
+                registerBranch(profile.branchId, candidateName)
+            }
+        }
+    }
+
+    fun resolve(rawIdOrName: String): String? {
+        val clean = rawIdOrName.trim()
+            .removePrefix("Cabang ")
+            .removePrefix("cabang ")
+            .trim()
+            .lowercase()
+        if (clean.isBlank()) return null
+        idToDisplayName[clean]?.let { return it }
+        val normalizedToken = normalizeBranchToken(clean)
+        if (normalizedToken.isNotBlank()) {
+            idToDisplayName[normalizedToken]?.let { return it }
+        }
+        return null
+    }
+
+    fun clearForTesting() {
+        idToDisplayName.clear()
+    }
+}
+
+object PasswordHasher {
+    private const val PREFIX = "sha256:"
+
+    fun isHashed(value: String): Boolean = value.startsWith(PREFIX) && value.length == PREFIX.length + 64
+
+    fun hashPassword(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        if (isHashed(trimmed)) return trimmed
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(trimmed.toByteArray(Charsets.UTF_8))
+        val hex = digest.joinToString("") { "%02x".format(it) }
+        return "$PREFIX$hex"
+    }
+
+    fun verifyPassword(input: String, stored: String): Boolean {
+        val cleanInput = input.trim()
+        val cleanStored = stored.trim()
+        if (cleanInput.isEmpty() || cleanStored.isEmpty()) return false
+        return if (isHashed(cleanStored)) {
+            hashPassword(cleanInput).equals(cleanStored, ignoreCase = true)
+        } else {
+            cleanInput == cleanStored
+        }
+    }
+}
+
 fun formatCleanBranchName(rawName: String, fallbackBranchId: String = ""): String {
     val trimmed = rawName.trim()
         .removePrefix("Cabang ")
@@ -902,6 +1001,7 @@ fun formatCleanBranchName(rawName: String, fallbackBranchId: String = ""): Strin
     if (trimmed.isNotBlank() && !isUuidOrInternalBranchId(trimmed)) {
         return trimmed
     }
+    BranchNameRegistry.resolve(trimmed)?.let { return it }
     val fb = fallbackBranchId.trim()
         .removePrefix("Cabang ")
         .removePrefix("cabang ")
@@ -912,20 +1012,24 @@ fun formatCleanBranchName(rawName: String, fallbackBranchId: String = ""): Strin
     if (fb.isNotBlank() && !isUuidOrInternalBranchId(fb)) {
         return fb
     }
+    BranchNameRegistry.resolve(fb)?.let { return it }
     return "Gabek"
 }
 
 fun sanitizeBranchIdsInText(text: String): String {
     if (text.isBlank()) return text
+    val replaceUuidOrBranchToken: (MatchResult) -> CharSequence = { match ->
+        BranchNameRegistry.resolve(match.value) ?: "Gabek"
+    }
     return text
         // Format order numbers that contain raw branch slugs or long hashes into clean WFL-010 format
         .replace(Regex("(?i)WFL-[A-Za-z0-9_-]{10,}-\\d{8}-(\\d+)"), "WFL-$1")
         .replace(Regex("(?i)WFL-BRANCH[0-9A-Z_-]{6,}-(\\d{8})-(\\d+)"), "WFL-$2")
-        .replace(Regex("(?i)BRANCH[0-9A-F]{8,}"), "Gabek")
-        .replace(Regex("(?i)BRANCH[0-9A-Za-z_]{8,}"), "Gabek")
-        .replace(Regex("(?i)branch_[0-9a-f-]{6,}"), "Gabek")
-        .replace(Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"), "Gabek")
-        .replace(Regex("(?i)\\b[0-9a-f]{20,}\\b"), "Gabek")
+        .replace(Regex("(?i)BRANCH[0-9A-F]{8,}"), replaceUuidOrBranchToken)
+        .replace(Regex("(?i)BRANCH[0-9A-Za-z_]{8,}"), replaceUuidOrBranchToken)
+        .replace(Regex("(?i)branch_[0-9a-f-]{6,}"), replaceUuidOrBranchToken)
+        .replace(Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"), replaceUuidOrBranchToken)
+        .replace(Regex("(?i)\\b[0-9a-f]{20,}\\b"), replaceUuidOrBranchToken)
 }
 
 data class BranchProfile(

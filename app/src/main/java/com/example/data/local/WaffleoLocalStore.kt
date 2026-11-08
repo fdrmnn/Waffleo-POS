@@ -46,22 +46,28 @@ class WaffleoLocalStore(context: Context) {
 
     private var onNetworkRestoredCallback: (() -> Unit)? = null
 
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var cachedOrders: List<OrderRecord>? = null
+    @Volatile private var cachedCatalog: List<CatalogRecord>? = null
+    @Volatile private var cachedMoneyTransactions: List<MoneyTransactionRecord>? = null
+    @Volatile private var cachedAuditLogs: List<AuditLogRecord>? = null
+
     init {
         performOneTimeProductionCleanIfNeeded()
         registerNetworkCallback()
     }
 
     /**
-     * Membersihkan seluruh data dummy lokal (Pesanan, Transaksi Keuangan, Bookmark, Promo, Audit Log)
+     * Membersihkan seluruh data dummy lokal (Pesanan, Transaksi Keuangan, Bookmark, Audit Log)
      * satu kali saat persiapan rilis v1.0, sambil mempertahankan seluruh Kategori, Sub-Kategori,
-     * dan Item pada Menu & Modifier (beserta konfigurasi cabang/staff/bank/wallet).
+     * Bahan Baku (INGREDIENT), Promo (PROMO), dan Item pada Menu & Modifier (beserta konfigurasi cabang/staff/bank/wallet).
      */
     private fun performOneTimeProductionCleanIfNeeded() {
         if (prefs.getBoolean(KEY_PRODUCTION_CLEAN_V1_DONE, false)) return
         val existingCatalog = loadCatalog()
         if (existingCatalog != null) {
             val cleanedCatalog = existingCatalog.filter { rec ->
-                rec.recordType in listOf("MENU_ITEM", "MODIFIER", "BRANCH_CONFIG") &&
+                rec.recordType in listOf("MENU_ITEM", "MODIFIER", "INGREDIENT", "PROMO", "BRANCH_CONFIG") &&
                     rec.id !in WaffleoSeedData.legacyDummyCatalogIds
             }
             saveCatalog(cleanedCatalog)
@@ -246,49 +252,54 @@ class WaffleoLocalStore(context: Context) {
     // --- ORDERS PERSISTENCE ---
 
     fun saveOrders(orders: List<OrderRecord>) {
-        val arr = JSONArray()
-        orders.forEach { ord ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", ord.id)
-                    put("userId", ord.userId)
-                    put("orderNumber", ord.orderNumber)
-                    put("sequenceIndex", ord.sequenceIndex)
-                    put("branchId", ord.branchId)
-                    put("orderMedia", ord.orderMedia)
-                    put("customerData", ord.customerData)
-                    put("itemsSummary", ord.itemsSummary)
-                    put("itemsPayload", ord.itemsPayload)
-                    put("notes", ord.notes)
-                    put("promoCode", ord.promoCode)
-                    put("subtotalAmount", ord.subtotalAmount)
-                    put("discountAmount", ord.discountAmount)
-                    put("totalAmount", ord.totalAmount)
-                    put("paidAmount", ord.paidAmount)
-                    put("cashReceivedAmount", ord.cashReceivedAmount)
-                    put("paymentMethod", ord.paymentMethod)
-                    put("isPaid", ord.isPaid)
-                    put("isPrepared", ord.isPrepared)
-                    put("status", ord.status)
-                    put("cancelReason", ord.cancelReason)
-                    put("cancelledBy", ord.cancelledBy)
-                    put("cancelledAtText", ord.cancelledAtText)
-                    put("shortfallAmount", ord.shortfallAmount)
-                    put("changeDueAmount", ord.changeDueAmount)
-                    put("splitCashAmount", ord.splitCashAmount)
-                    put("splitQrisAmount", ord.splitQrisAmount)
-                    put("createdBy", ord.createdBy)
-                    put("paymentLedgerPayload", ord.paymentLedgerPayload)
-                    put("orderTimelinePayload", ord.orderTimelinePayload)
-                    put("createdAtMs", ord.createdAt?.toDate()?.time ?: System.currentTimeMillis())
-                    put("updatedAtMs", ord.updatedAt?.toDate()?.time ?: System.currentTimeMillis())
-                }
-            )
+        val snapshot = orders.toList()
+        cachedOrders = snapshot
+        ioExecutor.execute {
+            val arr = JSONArray()
+            snapshot.forEach { ord ->
+                arr.put(
+                    JSONObject().apply {
+                        put("id", ord.id)
+                        put("userId", ord.userId)
+                        put("orderNumber", ord.orderNumber)
+                        put("sequenceIndex", ord.sequenceIndex)
+                        put("branchId", ord.branchId)
+                        put("orderMedia", ord.orderMedia)
+                        put("customerData", ord.customerData)
+                        put("itemsSummary", ord.itemsSummary)
+                        put("itemsPayload", ord.itemsPayload)
+                        put("notes", ord.notes)
+                        put("promoCode", ord.promoCode)
+                        put("subtotalAmount", ord.subtotalAmount)
+                        put("discountAmount", ord.discountAmount)
+                        put("totalAmount", ord.totalAmount)
+                        put("paidAmount", ord.paidAmount)
+                        put("cashReceivedAmount", ord.cashReceivedAmount)
+                        put("paymentMethod", ord.paymentMethod)
+                        put("isPaid", ord.isPaid)
+                        put("isPrepared", ord.isPrepared)
+                        put("status", ord.status)
+                        put("cancelReason", ord.cancelReason)
+                        put("cancelledBy", ord.cancelledBy)
+                        put("cancelledAtText", ord.cancelledAtText)
+                        put("shortfallAmount", ord.shortfallAmount)
+                        put("changeDueAmount", ord.changeDueAmount)
+                        put("splitCashAmount", ord.splitCashAmount)
+                        put("splitQrisAmount", ord.splitQrisAmount)
+                        put("createdBy", ord.createdBy)
+                        put("paymentLedgerPayload", ord.paymentLedgerPayload)
+                        put("orderTimelinePayload", ord.orderTimelinePayload)
+                        put("createdAtMs", ord.createdAt?.toDate()?.time ?: System.currentTimeMillis())
+                        put("updatedAtMs", ord.updatedAt?.toDate()?.time ?: System.currentTimeMillis())
+                    }
+                )
+            }
+            prefs.edit().putString(KEY_ORDERS, arr.toString()).apply()
         }
-        prefs.edit().putString(KEY_ORDERS, arr.toString()).apply()
     }
 
     fun loadOrders(): List<OrderRecord>? {
+        cachedOrders?.let { return it }
         val raw = prefs.getString(KEY_ORDERS, null) ?: return null
         return try {
             val arr = JSONArray(raw)
@@ -343,33 +354,38 @@ class WaffleoLocalStore(context: Context) {
     // --- CATALOG PERSISTENCE ---
 
     fun saveCatalog(records: List<CatalogRecord>) {
-        val arr = JSONArray()
-        records.forEach { rec ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", rec.id)
-                    put("userId", rec.userId)
-                    put("recordType", rec.recordType)
-                    put("branchId", rec.branchId)
-                    put("name", rec.name)
-                    put("category", rec.category)
-                    put("priceWalkIn", rec.priceWalkIn)
-                    put("priceGrabFood", rec.priceGrabFood)
-                    put("priceGoFood", rec.priceGoFood)
-                    put("priceShopeeFood", rec.priceShopeeFood)
-                    put("stockQty", rec.stockQty)
-                    put("stockUnit", rec.stockUnit)
-                    put("costPerUnit", rec.costPerUnit)
-                    put("metadataJson", rec.metadataJson)
-                    put("imageUrl", rec.imageUrl)
-                    put("isActive", rec.isActive)
-                }
-            )
+        val snapshot = records.toList()
+        cachedCatalog = snapshot
+        ioExecutor.execute {
+            val arr = JSONArray()
+            snapshot.forEach { rec ->
+                arr.put(
+                    JSONObject().apply {
+                        put("id", rec.id)
+                        put("userId", rec.userId)
+                        put("recordType", rec.recordType)
+                        put("branchId", rec.branchId)
+                        put("name", rec.name)
+                        put("category", rec.category)
+                        put("priceWalkIn", rec.priceWalkIn)
+                        put("priceGrabFood", rec.priceGrabFood)
+                        put("priceGoFood", rec.priceGoFood)
+                        put("priceShopeeFood", rec.priceShopeeFood)
+                        put("stockQty", rec.stockQty)
+                        put("stockUnit", rec.stockUnit)
+                        put("costPerUnit", rec.costPerUnit)
+                        put("metadataJson", rec.metadataJson)
+                        put("imageUrl", rec.imageUrl)
+                        put("isActive", rec.isActive)
+                    }
+                )
+            }
+            prefs.edit().putString(KEY_CATALOG, arr.toString()).apply()
         }
-        prefs.edit().putString(KEY_CATALOG, arr.toString()).apply()
     }
 
     fun loadCatalog(): List<CatalogRecord>? {
+        cachedCatalog?.let { return it }
         val raw = prefs.getString(KEY_CATALOG, null) ?: return null
         return try {
             val arr = JSONArray(raw)
@@ -406,39 +422,45 @@ class WaffleoLocalStore(context: Context) {
     // --- MONEY TRANSACTIONS & BOOKMARKS PERSISTENCE ---
 
     fun saveMoneyTransactions(list: List<MoneyTransactionRecord>) {
-        val arr = JSONArray()
-        list.forEach { tx ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", tx.id)
-                    put("branchId", tx.branchId)
-                    put("type", tx.type.name)
-                    put("timestampMillis", tx.timestampMillis)
-                    put("dateKey", tx.dateKey)
-                    put("monthKey", tx.monthKey)
-                    put("timeFormatted", tx.timeFormatted)
-                    put("amount", tx.amount)
-                    put("transferFee", tx.transferFee)
-                    put("category", tx.category)
-                    put("subCategory", tx.subCategory)
-                    put("accountGroup", tx.accountGroup)
-                    put("accountName", tx.accountName)
-                    put("toAccountGroup", tx.toAccountGroup)
-                    put("toAccountName", tx.toAccountName)
-                    put("note", tx.note)
-                    put("description", tx.description)
-                    put("tag", tx.tag)
-                    put("repetition", tx.repetition)
-                    put("isAutoPosSync", tx.isAutoPosSync)
-                    put("posSyncKey", tx.posSyncKey)
-                    put("createdBy", tx.createdBy)
-                }
-            )
+        val snapshot = list.toList()
+        cachedMoneyTransactions = snapshot
+        ioExecutor.execute {
+            val arr = JSONArray()
+            snapshot.forEach { tx ->
+                arr.put(
+                    JSONObject().apply {
+                        put("id", tx.id)
+                        put("branchId", tx.branchId)
+                        put("type", tx.type.name)
+                        put("timestampMillis", tx.timestampMillis)
+                        put("dateKey", tx.dateKey)
+                        put("monthKey", tx.monthKey)
+                        put("timeFormatted", tx.timeFormatted)
+                        put("amount", tx.amount)
+                        put("transferFee", tx.transferFee)
+                        put("category", tx.category)
+                        put("subCategory", tx.subCategory)
+                        put("accountGroup", tx.accountGroup)
+                        put("accountName", tx.accountName)
+                        put("toAccountGroup", tx.toAccountGroup)
+                        put("toAccountName", tx.toAccountName)
+                        put("note", tx.note)
+                        put("description", tx.description)
+                        put("tag", tx.tag)
+                        put("repetition", tx.repetition)
+                        put("isAutoPosSync", tx.isAutoPosSync)
+                        put("posSyncKey", tx.posSyncKey)
+                        put("createdBy", tx.createdBy)
+                        put("feeAccountChoice", tx.feeAccountChoice)
+                    }
+                )
+            }
+            prefs.edit().putString(KEY_MONEY_TX, arr.toString()).apply()
         }
-        prefs.edit().putString(KEY_MONEY_TX, arr.toString()).apply()
     }
 
     fun loadMoneyTransactions(): List<MoneyTransactionRecord>? {
+        cachedMoneyTransactions?.let { return it }
         val raw = prefs.getString(KEY_MONEY_TX, null) ?: return null
         return try {
             val arr = JSONArray(raw)
@@ -474,7 +496,8 @@ class WaffleoLocalStore(context: Context) {
                         repetition = obj.optString("repetition", "None"),
                         isAutoPosSync = obj.optBoolean("isAutoPosSync", false),
                         posSyncKey = obj.optString("posSyncKey", ""),
-                        createdBy = obj.optString("createdBy", "owner")
+                        createdBy = obj.optString("createdBy", "owner"),
+                        feeAccountChoice = obj.optString("feeAccountChoice", "FROM")
                     )
                 )
             }
@@ -670,28 +693,33 @@ class WaffleoLocalStore(context: Context) {
     // --- AUDIT LOGS PERSISTENCE ---
 
     fun saveAuditLogs(logs: List<AuditLogRecord>) {
-        val arr = JSONArray()
-        logs.take(500).forEach { log ->
-            arr.put(
-                JSONObject().apply {
-                    put("id", log.id)
-                    put("userId", log.userId)
-                    put("branchId", log.branchId)
-                    put("actorUsername", log.actorUsername)
-                    put("actorRole", log.actorRole)
-                    put("actionType", log.actionType)
-                    put("entityId", log.entityId)
-                    put("summary", log.summary)
-                    put("beforeSnapshot", log.beforeSnapshot)
-                    put("afterSnapshot", log.afterSnapshot)
-                    put("createdAtMs", log.createdAt?.toDate()?.time ?: System.currentTimeMillis())
-                }
-            )
+        val snapshot = logs.take(500)
+        cachedAuditLogs = snapshot
+        ioExecutor.execute {
+            val arr = JSONArray()
+            snapshot.forEach { log ->
+                arr.put(
+                    JSONObject().apply {
+                        put("id", log.id)
+                        put("userId", log.userId)
+                        put("branchId", log.branchId)
+                        put("actorUsername", log.actorUsername)
+                        put("actorRole", log.actorRole)
+                        put("actionType", log.actionType)
+                        put("entityId", log.entityId)
+                        put("summary", log.summary)
+                        put("beforeSnapshot", log.beforeSnapshot)
+                        put("afterSnapshot", log.afterSnapshot)
+                        put("createdAtMs", log.createdAt?.toDate()?.time ?: System.currentTimeMillis())
+                    }
+                )
+            }
+            prefs.edit().putString(KEY_AUDIT_LOGS, arr.toString()).apply()
         }
-        prefs.edit().putString(KEY_AUDIT_LOGS, arr.toString()).apply()
     }
 
     fun loadAuditLogs(): List<AuditLogRecord>? {
+        cachedAuditLogs?.let { return it }
         val raw = prefs.getString(KEY_AUDIT_LOGS, null) ?: return null
         return try {
             val arr = JSONArray(raw)

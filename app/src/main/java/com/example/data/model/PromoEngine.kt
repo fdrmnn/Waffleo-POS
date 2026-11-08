@@ -570,7 +570,17 @@ object WaffleoPromoEngine {
                         it.recordType == "MENU_ITEM" &&
                             (it.id == line.secondaryItemId || it.name.equals(line.secondaryItemName, ignoreCase = true))
                     }
-                    p1 + (cat2?.priceForMedia(media) ?: 0L)
+                    val p2 = cat2?.priceForMedia(media)
+                    if (p2 != null) {
+                        val polosItem = catalog.firstOrNull {
+                            it.recordType == "MENU_ITEM" &&
+                                (it.id.equals("waffle_polos", ignoreCase = true) || it.name.equals("Waffle Polos", ignoreCase = true))
+                        }
+                        val polosPrice = polosItem?.priceForMedia(media) ?: 13000L
+                        (p1 + p2 - polosPrice).coerceAtLeast(p1)
+                    } else {
+                        p1
+                    }
                 } else {
                     p1
                 }

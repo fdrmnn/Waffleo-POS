@@ -254,8 +254,9 @@ fun OrdersQueueScreen(
                 contentPadding = PaddingValues(bottom = 24.dp, top = 2.dp)
             ) {
                 items(activeOrders, key = { it.id }) { order ->
-                    val netBca = viewModel.calculateOrderNetAmount(order)
-                    val platformFee = viewModel.calculateOrderPlatformFee(order)
+                    val isPlat = OrderMedia.fromLabel(order.orderMedia).isPlatform
+                    val netBca = if (isPlat) viewModel.calculateOrderNetAmount(order) else order.totalAmount
+                    val platformFee = if (isPlat) viewModel.calculateOrderPlatformFee(order) else 0L
                     ActiveOrderCard(
                         order = order,
                         netBcaAmount = netBca,
@@ -1588,6 +1589,7 @@ fun OrderHistoryScreen(
     clickedOrderForDetail?.let { ord ->
         var showEraseConfirmDialog by remember { mutableStateOf(false) }
         var showPurgeConfirmDialog by remember { mutableStateOf(false) }
+        var showThermalReceiptReprint by remember { mutableStateOf(false) }
         var eraseReasonInput by remember { mutableStateOf("Dihapus oleh Owner") }
         val canEraseOrder = (session.role == StaffRole.OWNER || session.role == StaffRole.DEVELOPER) && ord.status != "ERASED"
         val canPurgeOrderPermanently = (session.role == StaffRole.OWNER || session.role == StaffRole.DEVELOPER) && ord.status == "ERASED"
@@ -2076,19 +2078,53 @@ fun OrderHistoryScreen(
                             Spacer(modifier = Modifier.width(1.dp))
                         }
 
-                        Button(
-                            onClick = { clickedOrderForDetail = null },
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = RichEspressoPrimary),
-                            modifier = Modifier
-                                .height(46.dp)
-                                .width(160.dp)
-                                .testTag("order_detail_close_button")
-                        ) {
-                            Text("Tutup Detail")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = { showThermalReceiptReprint = true },
+                                shape = RoundedCornerShape(50),
+                                border = BorderStroke(1.2.dp, RichEspressoPrimary.copy(alpha = 0.7f)),
+                                modifier = Modifier
+                                    .height(46.dp)
+                                    .testTag("order_detail_reprint_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Print,
+                                    contentDescription = "Cetak Struk",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = RichEspressoPrimary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Cetak Struk",
+                                    fontWeight = FontWeight.Bold,
+                                    color = RichEspressoPrimary
+                                )
+                            }
+
+                            Button(
+                                onClick = { clickedOrderForDetail = null },
+                                shape = RoundedCornerShape(50),
+                                colors = ButtonDefaults.buttonColors(containerColor = RichEspressoPrimary),
+                                modifier = Modifier
+                                    .height(46.dp)
+                                    .width(160.dp)
+                                    .testTag("order_detail_close_button")
+                            ) {
+                                Text("Tutup Detail")
+                            }
                         }
                     }
                 }
+            }
+
+            if (showThermalReceiptReprint) {
+                ThermalReceiptDialog(
+                    order = ord,
+                    onDismiss = { showThermalReceiptReprint = false },
+                    onPrinted = {
+                        viewModel.showBanner("Struk pesanan ${ord.displayOrderNumber} berhasil dicetak ulang.")
+                    }
+                )
             }
 
             if (showEraseConfirmDialog) {
@@ -2249,7 +2285,7 @@ private fun OrderRecord.matchesSearchQuery(query: String): Boolean {
     if (notes.lowercase(Locale.ROOT).contains(q)) return true
     if (itemsSummary.lowercase(Locale.ROOT).contains(q)) return true
 
-    val lineItems = CartLineItem.deserializeList(itemsPayload)
+    val lineItems = parsedLineItems
     for (item in lineItems) {
         if (item.primaryItemName.lowercase(Locale.ROOT).contains(q)) return true
         if (item.secondaryItemName.lowercase(Locale.ROOT).contains(q)) return true

@@ -887,6 +887,41 @@ class ExampleUnitTest {
     )
     assertEquals("Seluruh item pesanan WFL-010 selesai disiapkan di dapur oleh fdrmnn.", event.description)
   }
+
+  @Test
+  fun branchNameRegistry_resolvesDynamicUuidBranchesAndFallsBackToGabekForUnregistered() {
+    com.example.data.model.BranchNameRegistry.clearForTesting()
+    val sungailiatUuid = "branch_99aabbccddeeff001122334455667788"
+    com.example.data.model.BranchNameRegistry.registerBranch(sungailiatUuid, "Sungailiat")
+
+    assertEquals("Sungailiat", com.example.data.model.formatCleanBranchName(sungailiatUuid))
+    assertEquals("Sungailiat", com.example.data.model.formatCleanBranchName("BRANCH99AABBCCDDEEFF001122334455667788"))
+
+    val unregisteredUuid = "branch_c372605c63b64418bff3ac4644f22a10"
+    assertEquals("Gabek", com.example.data.model.formatCleanBranchName(unregisteredUuid))
+    com.example.data.model.BranchNameRegistry.clearForTesting()
+  }
+
+  @Test
+  fun calculator_evaluatesMultiplicationAndDivisionBeforeAdditionAndSubtraction() {
+    assertEquals(20000L, com.example.ui.components.evaluateSimpleMathExpression("10000 + 5000 × 2"))
+    assertEquals(15000L, com.example.ui.components.evaluateSimpleMathExpression("25000 - 20000 ÷ 2"))
+    assertEquals(35000L, com.example.ui.components.evaluateSimpleMathExpression("5000 × 4 + 3000 × 5"))
+  }
+
+  @Test
+  fun passwordHasher_hashesWithSha256AndSupportsLegacyPlaintextCompatibility() {
+    val raw = "rahasiaKasir123"
+    val hashed = com.example.data.model.PasswordHasher.hashPassword(raw)
+    assertTrue(com.example.data.model.PasswordHasher.isHashed(hashed))
+    assertNotEquals(raw, hashed)
+    assertTrue(com.example.data.model.PasswordHasher.verifyPassword(raw, hashed))
+    assertFalse(com.example.data.model.PasswordHasher.verifyPassword("salahPassword", hashed))
+
+    // Backward compatibility with legacy plaintext password
+    assertTrue(com.example.data.model.PasswordHasher.verifyPassword(raw, raw))
+    assertFalse(com.example.data.model.PasswordHasher.verifyPassword("salah", raw))
+  }
 }
 
 

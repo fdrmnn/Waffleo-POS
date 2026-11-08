@@ -124,13 +124,16 @@ test("Authenticated owner can create and update a valid order (with cashReceived
     })
   );
 
-  // Order deletion is permanently blocked (only Cancel Order is allowed)
-  await assertFails(orderDoc.delete());
-
-  // Cross-user cannot read or update private user path
+  // Cross-user cannot read, update, or delete private user path
   await assertFails(
     otherDb.collection("users").doc(OWNER_UID).collection("orders").doc("order_001").get()
   );
+  await assertFails(
+    otherDb.collection("users").doc(OWNER_UID).collection("orders").doc("order_001").delete()
+  );
+
+  // Authorized Owner can permanently purge an ERASED order
+  await assertSucceeds(orderDoc.delete());
 });
 
 test("Multi-device Shared Cloud Workspace allows Device A and Device B to sync branches, orders, and settings", async () => {

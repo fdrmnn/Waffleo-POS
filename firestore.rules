@@ -86,7 +86,7 @@ service cloud.firestore {
         && request.resource.data.orderNumber == resource.data.orderNumber
         && request.resource.data.sequenceIndex == resource.data.sequenceIndex
         && (
-          request.resource.data.status in ['CANCELLED', 'ERASED']
+          request.resource.data.status in ['ACTIVE', 'CANCELLED', 'ERASED']
           || !(resource.data.isPrepared == true && request.resource.data.isPrepared == false)
         );
     }
@@ -102,7 +102,7 @@ service cloud.firestore {
       && data.keys().hasOnly([
         'userId', 'recordType', 'branchId', 'name', 'category',
         'priceWalkIn', 'priceGrabFood', 'priceGoFood', 'priceShopeeFood',
-        'stockQty', 'stockUnit', 'costPerUnit', 'metadataJson',
+        'stockQty', 'stockUnit', 'costPerUnit', 'metadataJson', 'imageUrl',
         'isActive', 'createdAt', 'updatedAt'
       ])
       && isValidWorkspaceUserId(userId, data.userId)
@@ -118,6 +118,7 @@ service cloud.firestore {
       && data.stockUnit is string && data.stockUnit.size() >= 1 && data.stockUnit.size() <= 40
       && data.costPerUnit is int && data.costPerUnit >= 0 && data.costPerUnit <= 100000000
       && data.metadataJson is string && data.metadataJson.size() >= 2 && data.metadataJson.size() <= 15000
+      && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000))
       && data.isActive is bool
       && data.createdAt is timestamp
       && data.updatedAt is timestamp;
@@ -151,7 +152,14 @@ service cloud.firestore {
 
     function isValidMoneyTransactionDoc(userId) {
       let data = request.resource.data;
-      return isValidWorkspaceUserId(userId, data.userId)
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'type', 'timestampMillis', 'dateKey', 'monthKey',
+          'timeFormatted', 'amount', 'transferFee', 'category', 'subCategory',
+          'accountGroup', 'accountName', 'toAccountGroup', 'toAccountName',
+          'note', 'description', 'tag', 'repetition', 'isAutoPosSync',
+          'posSyncKey', 'createdBy', 'feeAccountChoice', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
         && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
         && data.type in ['INCOME', 'EXPENSE', 'TRANSFER']
         && data.amount is int && data.amount >= 0 && data.amount <= 10000000000;
@@ -159,7 +167,11 @@ service cloud.firestore {
 
     function isValidStaffAccountDoc(userId) {
       let data = request.resource.data;
-      return isValidWorkspaceUserId(userId, data.userId)
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'username', 'password', 'role',
+          'displayName', 'email', 'phone', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
         && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
         && data.username is string && data.username.size() >= 1 && data.username.size() <= 80
         && data.role in ['DEVELOPER', 'OWNER', 'SUPERVISOR', 'KASIR'];
@@ -167,8 +179,14 @@ service cloud.firestore {
 
     function isValidBranchProfileDoc(userId) {
       let data = request.resource.data;
-      return isValidWorkspaceUserId(userId, data.userId)
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'name', 'location', 'ownerName',
+          'ownerEmail', 'ownerPhone', 'ownerUsername',
+          'initializedFrom', 'createdAtText', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
         && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+        && (!('name' in data) || (data.name is string && data.name.size() <= 200))
         && data.location is string && data.location.size() <= 300
         && data.ownerName is string && data.ownerName.size() <= 160
         && (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 160))
@@ -180,7 +198,8 @@ service cloud.firestore {
 
     function isValidWorkspaceSettingsDoc(userId) {
       let data = request.resource.data;
-      return isValidWorkspaceUserId(userId, data.userId)
+      return data.keys().hasOnly(['userId', 'settingKey', 'payloadJson', 'updatedAt'])
+        && isValidWorkspaceUserId(userId, data.userId)
         && data.settingKey is string && data.settingKey.size() >= 1 && data.settingKey.size() <= 100
         && data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 50000;
     }

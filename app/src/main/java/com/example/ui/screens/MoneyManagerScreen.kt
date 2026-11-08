@@ -1151,7 +1151,25 @@ private fun MoneyStatsTabContent(
     var selectedStatsType by remember { mutableStateOf(MoneyTransactionType.EXPENSE) }
 
     val filteredByType = remember(monthTransactions, selectedStatsType) {
-        monthTransactions.filter { it.type == selectedStatsType }
+        if (selectedStatsType == MoneyTransactionType.EXPENSE) {
+            val directExpenses = monthTransactions
+                .filter { it.type == MoneyTransactionType.EXPENSE }
+                .map { if (it.feeAmount > 0L) it.copy(amount = it.amount + it.feeAmount) else it }
+            val transferFeeExpenses = monthTransactions
+                .filter { it.type == MoneyTransactionType.TRANSFER && it.feeAmount > 0L }
+                .map {
+                    it.copy(
+                        type = MoneyTransactionType.EXPENSE,
+                        amount = it.feeAmount,
+                        transferFee = 0L,
+                        category = "Biaya Administrasi",
+                        subCategory = "Biaya Transfer (${it.accountName} → ${it.toAccountName})"
+                    )
+                }
+            directExpenses + transferFeeExpenses
+        } else {
+            monthTransactions.filter { it.type == selectedStatsType }
+        }
     }
     val totalForType = remember(filteredByType) {
         filteredByType.sumOf { it.amount }.coerceAtLeast(1L)
@@ -2187,7 +2205,7 @@ private fun MoneyTransactionFormDialog(
         )
     }
     var feeAccountChoice by remember {
-        mutableStateOf(defaultFeeAccountChoice)
+        mutableStateOf(existingTransaction?.feeAccountChoice?.ifBlank { defaultFeeAccountChoice } ?: defaultFeeAccountChoice)
     }
 
     val evaluatedFeeAmount = remember(feeExpression) {
@@ -3157,18 +3175,22 @@ private fun MoneyTransactionFormDialog(
                                 }
                             }
 
+                            val isFormValid = evaluatedAmount > 0L &&
+                                selectedAccountName.isNotBlank() &&
+                                (if (txType == MoneyTransactionType.TRANSFER) toAccountName.isNotBlank() else selectedCategoryName.isNotBlank())
+
                             if (existingTransaction == null) {
                                 Surface(
                                     shape = RoundedCornerShape(50),
                                     color = SoftOatSurface,
-                                    border = BorderStroke(1.dp, activeAccentColor),
+                                    border = BorderStroke(1.dp, if (isFormValid) activeAccentColor else SubtleSandBorder),
                                     modifier = Modifier
                                         .height(40.dp)
                                         .clip(RoundedCornerShape(50))
-                                        .clickable {
+                                        .clickable(enabled = isFormValid) {
                                             val finalAmt = evaluateSimpleMathExpression(amountExpression)
                                             val finalFeeAmt = evaluateSimpleMathExpression(feeExpression)
-                                            if (finalAmt > 0L) {
+                                            if (finalAmt > 0L && isFormValid) {
                                                 val rec = buildTransactionRecord(
                                                     existing = null,
                                                     txType = txType,
@@ -3176,6 +3198,7 @@ private fun MoneyTransactionFormDialog(
                                                     timeText = timeText,
                                                     amount = finalAmt,
                                                     feeAmount = if (txType == MoneyTransactionType.TRANSFER && showFeeField) finalFeeAmt else 0L,
+                                                    feeAccountChoice = feeAccountChoice,
                                                     categoryName = selectedCategoryName,
                                                     subCategoryName = selectedSubCategoryName,
                                                     accountGroup = selectedAccountGroup,
@@ -3196,7 +3219,11 @@ private fun MoneyTransactionFormDialog(
                                         }
                                 ) {
                                     Box(modifier = Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-                                        Text("Continue", style = MaterialTheme.typography.labelLarge, color = activeAccentColor)
+                                        Text(
+                                            "Continue",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (isFormValid) activeAccentColor else MutedCocoaText
+                                        )
                                     }
                                 }
                             }
@@ -3205,7 +3232,7 @@ private fun MoneyTransactionFormDialog(
                                 onClick = {
                                     val finalAmt = evaluateSimpleMathExpression(amountExpression)
                                     val finalFeeAmt = evaluateSimpleMathExpression(feeExpression)
-                                    if (finalAmt > 0L) {
+                                    if (finalAmt > 0L && isFormValid) {
                                         val rec = buildTransactionRecord(
                                             existing = existingTransaction,
                                             txType = txType,
@@ -3213,6 +3240,7 @@ private fun MoneyTransactionFormDialog(
                                             timeText = timeText,
                                             amount = finalAmt,
                                             feeAmount = if (txType == MoneyTransactionType.TRANSFER && showFeeField) finalFeeAmt else 0L,
+                                            feeAccountChoice = feeAccountChoice,
                                             categoryName = selectedCategoryName,
                                             subCategoryName = selectedSubCategoryName,
                                             accountGroup = selectedAccountGroup,
@@ -3227,7 +3255,7 @@ private fun MoneyTransactionFormDialog(
                                         onSaveTransaction(rec, false)
                                     }
                                 },
-                                enabled = evaluatedAmount > 0L,
+                                enabled = isFormValid,
                                 shape = RoundedCornerShape(50),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = activeAccentColor,
@@ -4027,6 +4055,7 @@ private fun buildTransactionRecord(
     timeText: String,
     amount: Long,
     feeAmount: Long,
+    feeAccountChoice: String = "FROM",
     categoryName: String,
     subCategoryName: String,
     accountGroup: String,
@@ -4038,7 +4067,7 @@ private fun buildTransactionRecord(
     tag: String,
     repetition: MoneyRepetitionOption
 ): MoneyTransactionRecord {
-    val resolvedDate = dateKey.trim().ifEmpty { "2026-10-31" }
+    val resolvedDate = dateKey.trim().ifEmpty { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
     return MoneyTransactionRecord(
         id = existing?.id.orEmpty(),
         branchId = existing?.branchId.orEmpty(),
@@ -4048,6 +4077,7 @@ private fun buildTransactionRecord(
         timeFormatted = timeText.trim().ifEmpty { "12:00" },
         amount = amount,
         transferFee = if (txType == MoneyTransactionType.TRANSFER) feeAmount else 0L,
+        feeAccountChoice = if (txType == MoneyTransactionType.TRANSFER) feeAccountChoice.ifBlank { "FROM" } else "FROM",
         category = if (txType == MoneyTransactionType.TRANSFER) "Transfer" else categoryName,
         subCategory = if (txType == MoneyTransactionType.TRANSFER) "" else subCategoryName,
         accountGroup = accountGroup,
@@ -4061,46 +4091,8 @@ private fun buildTransactionRecord(
     )
 }
 
-private fun evaluateSimpleMathExpression(expr: String): Long {
-    val clean = expr.replace(" ", "").replace("×", "*").replace("÷", "/")
-    if (clean.isEmpty()) return 0L
-    val direct = clean.toLongOrNull()
-    if (direct != null) return direct.coerceAtLeast(0L)
-
-    return try {
-        var total = 0.0
-        var currentNumber = ""
-        var lastOp = '+'
-
-        fun applyOp(numStr: String, op: Char) {
-            val v = numStr.toDoubleOrNull() ?: 0.0
-            when (op) {
-                '+' -> total += v
-                '-' -> total -= v
-                '*' -> total *= v
-                '/' -> if (v != 0.0) total /= v
-            }
-        }
-
-        for (ch in clean) {
-            if (ch.isDigit() || ch == '.') {
-                currentNumber += ch
-            } else if (ch in listOf('+', '-', '*', '/')) {
-                if (currentNumber.isNotEmpty()) {
-                    applyOp(currentNumber, lastOp)
-                    currentNumber = ""
-                }
-                lastOp = ch
-            }
-        }
-        if (currentNumber.isNotEmpty()) {
-            applyOp(currentNumber, lastOp)
-        }
-        total.toLong().coerceAtLeast(0L)
-    } catch (e: Exception) {
-        clean.filter { it.isDigit() }.toLongOrNull() ?: 0L
-    }
-}
+private fun evaluateSimpleMathExpression(expr: String): Long =
+    com.example.ui.components.evaluateSimpleMathExpression(expr)
 
 private fun formatMonthKeyLabel(monthKey: String): String {
     val parts = monthKey.split("-")

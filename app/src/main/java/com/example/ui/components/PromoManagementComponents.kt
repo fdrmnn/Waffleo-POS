@@ -2088,6 +2088,13 @@ fun PromoFormModalDialog(
                                 validationError = "Tanggal berakhir tidak boleh lebih awal dari tanggal mulai."
                                 return@Button
                             }
+                            if (isHappyHourEnabled) {
+                                val timeRegex = Regex("^([01]?\\d|2[0-3]):[0-5]\\d$")
+                                if (!timeRegex.matches(startTimeText.trim()) || !timeRegex.matches(endTimeText.trim())) {
+                                    validationError = "Format jam Happy Hour harus HH:mm yang valid (00:00 - 23:59)."
+                                    return@Button
+                                }
+                            }
                             if (hasQuotaLimit && maxQuota <= 0) {
                                 validationError = "Kuota maksimal harus lebih dari 0 jika pembatasan kuota diaktifkan."
                                 return@Button

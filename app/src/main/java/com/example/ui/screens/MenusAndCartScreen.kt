@@ -144,6 +144,7 @@ fun MenusAndCartScreen(
     val cartBackdatedDateKey by viewModel.cartBackdatedDateKey.collectAsState()
     val cartBackdatedTimeText by viewModel.cartBackdatedTimeText.collectAsState()
     val isStoreOpen by viewModel.isStoreOpen.collectAsState()
+    val orders by viewModel.orders.collectAsState()
 
     val customMenuCategories by viewModel.customMenuCategories.collectAsState()
     val modifierToMenuCategoryMap by viewModel.modifierToMenuCategoryMap.collectAsState()
@@ -166,7 +167,7 @@ fun MenusAndCartScreen(
     val activeIce = remember(catalog) {
         catalog.filter { it.recordType == "MODIFIER" && areCategoriesMatching(it.category, "Ice Level") && it.isActive }
     }
-    val activePromos = remember(catalog, session.branchId) {
+    val activePromos = remember(catalog, session.branchId, orders) {
         catalog.filter { rec ->
             if (rec.recordType != "PROMO") return@filter false
             val cfg = PromoConfig.fromCatalogRecord(rec)
@@ -943,6 +944,41 @@ fun MenusAndCartScreen(
                 val effectiveSelectedMode = selectedPromoId.ifBlank { "AUTO" }
                 val currentPromoObj = promoOptions.firstOrNull { it.id == effectiveSelectedMode } ?: promoOptions.first()
 
+                if (cartItems.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Item Pesanan (${cartItems.sumOf { it.qty }})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MutedCocoaText
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = SoftTerracottaBg,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .clickable { viewModel.clearCart() }
+                                .testTag("cart_clear_all_btn")
+                        ) {
+                            Text(
+                                text = "Kosongkan",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.5.sp
+                                ),
+                                color = TerracottaDanger,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
@@ -992,9 +1028,18 @@ fun MenusAndCartScreen(
                         }
                     } else {
                         items(cartItems, key = { it.lineId }) { lineItem ->
+                            val itemImageUrl = remember(lineItem.primaryItemId, lineItem.primaryItemName, catalog) {
+                                catalog.firstOrNull {
+                                    it.recordType == "MENU_ITEM" && (
+                                        (lineItem.primaryItemId.isNotBlank() && it.id == lineItem.primaryItemId) ||
+                                            it.name.equals(lineItem.primaryItemName, ignoreCase = true)
+                                        )
+                                }?.imageUrl.orEmpty()
+                            }
                             CartItemRow(
                                 item = lineItem,
                                 media = cartMedia,
+                                imageUrl = itemImageUrl,
                                 onDecrement = { viewModel.updateCartItemQuantity(lineItem.lineId, -1) },
                                 onIncrement = { viewModel.updateCartItemQuantity(lineItem.lineId, +1) }
                             )
@@ -1046,18 +1091,18 @@ fun MenusAndCartScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // PINNED BOTTOM FOOTER: Total Harga Pesanan + Floating Pill Buttons [ Pay / Paid ] & [ Add to Orders ]
-                val promoEvaluation = viewModel.evaluateCartPromoDetails(
-                    items = cartItems,
-                    media = cartMedia,
-                    promoIdOrMode = effectiveSelectedMode,
-                    voucherCode = cartVoucherCode,
-                    allCatalog = catalog
-                )
+                val promoEvaluation = remember(cartItems, cartMedia, effectiveSelectedMode, cartVoucherCode, catalog, orders) {
+                    viewModel.evaluateCartPromoDetails(
+                        items = cartItems,
+                        media = cartMedia,
+                        promoIdOrMode = effectiveSelectedMode,
+                        voucherCode = cartVoucherCode,
+                        allCatalog = catalog
+                    )
+                }
                 val subtotal = promoEvaluation.subtotalBeforeDiscount
                 val discount = promoEvaluation.totalDiscountAmount
                 val totalAmount = promoEvaluation.finalTotalAmount
-                val platformDeduction = viewModel.calculatePlatformDeduction(totalAmount, cartMedia, catalog)
-                val netBcaAmount = viewModel.calculateNetEnteredSystemAmount(totalAmount, cartMedia, catalog)
 
                 val paidSoFar = if (cartMedia.isPlatform) 0L else maxOf(editingOrder?.paidAmount ?: 0L, cartPaidAmount)
                 val cartShortfall = if (!cartMedia.isPlatform && paidSoFar > 0L && totalAmount > paidSoFar) {
@@ -1450,6 +1495,7 @@ private fun MenuCatalogCard(
 private fun CartItemRow(
     item: CartLineItem,
     media: OrderMedia,
+    imageUrl: String = "",
     onDecrement: () -> Unit,
     onIncrement: () -> Unit
 ) {
@@ -1478,6 +1524,7 @@ private fun CartItemRow(
                     WaffleoProductIllustration(
                         itemName = item.primaryItemName,
                         isWaffle = item.category == "Egg Waffle",
+                        imageUrl = imageUrl,
                         modifier = Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(10.dp))
@@ -1523,7 +1570,7 @@ private fun CartItemRow(
                             shape = CircleShape,
                             color = ElevatedIvoryCard,
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(30.dp)
                                 .clip(CircleShape)
                                 .clickable(onClick = onDecrement)
                                 .testTag("cart_qty_minus_${item.lineId}")
@@ -1533,7 +1580,7 @@ private fun CartItemRow(
                                     imageVector = Icons.Default.Remove,
                                     contentDescription = "Kurangi Qty",
                                     tint = RichEspressoPrimary,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                         }
@@ -1550,7 +1597,7 @@ private fun CartItemRow(
                             shape = CircleShape,
                             color = RichEspressoPrimary,
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(30.dp)
                                 .clip(CircleShape)
                                 .clickable(onClick = onIncrement)
                                 .testTag("cart_qty_plus_${item.lineId}")
@@ -1560,7 +1607,7 @@ private fun CartItemRow(
                                     imageVector = Icons.Default.Add,
                                     contentDescription = "Tambah Qty",
                                     tint = SoftGoldHighlight,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                         }

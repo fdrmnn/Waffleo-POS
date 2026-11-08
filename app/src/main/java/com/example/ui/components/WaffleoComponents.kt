@@ -1423,6 +1423,7 @@ enum class PaymentCalcTarget {
 
 /**
  * Mathematical evaluation helper for expression string into Long amount (Rupiah).
+ * Supports standard operator precedence (* and / evaluated before + and -).
  */
 fun evaluateSimpleMathExpression(expr: String): Long {
     val clean = expr.replace(" ", "").replace("×", "*").replace("÷", "/")
@@ -1431,33 +1432,57 @@ fun evaluateSimpleMathExpression(expr: String): Long {
     if (direct != null) return direct.coerceAtLeast(0L)
 
     return try {
-        var total = 0.0
+        val numbers = mutableListOf<Double>()
+        val ops = mutableListOf<Char>()
         var currentNumber = ""
-        var lastOp = '+'
-
-        fun applyOp(numStr: String, op: Char) {
-            val v = numStr.toDoubleOrNull() ?: 0.0
-            when (op) {
-                '+' -> total += v
-                '-' -> total -= v
-                '*' -> total *= v
-                '/' -> if (v != 0.0) total /= v
-            }
-        }
 
         for (ch in clean) {
             if (ch.isDigit() || ch == '.') {
                 currentNumber += ch
             } else if (ch in listOf('+', '-', '*', '/')) {
                 if (currentNumber.isNotEmpty()) {
-                    applyOp(currentNumber, lastOp)
+                    numbers.add(currentNumber.toDoubleOrNull() ?: 0.0)
                     currentNumber = ""
+                    ops.add(ch)
+                } else if (numbers.isEmpty() && ch == '-') {
+                    currentNumber = "-"
+                } else if (ops.isNotEmpty() && currentNumber.isEmpty()) {
+                    ops[ops.lastIndex] = ch
                 }
-                lastOp = ch
             }
         }
         if (currentNumber.isNotEmpty()) {
-            applyOp(currentNumber, lastOp)
+            numbers.add(currentNumber.toDoubleOrNull() ?: 0.0)
+        }
+        while (ops.size >= numbers.size && ops.isNotEmpty()) {
+            ops.removeAt(ops.lastIndex)
+        }
+        if (numbers.isEmpty()) return 0L
+
+        // Pass 1: Evaluate * and / with higher precedence
+        var i = 0
+        while (i < ops.size) {
+            val op = ops[i]
+            if (op == '*' || op == '/') {
+                val left = numbers[i]
+                val right = numbers[i + 1]
+                val merged = if (op == '*') left * right else if (right != 0.0) left / right else left
+                numbers[i] = merged
+                numbers.removeAt(i + 1)
+                ops.removeAt(i)
+            } else {
+                i++
+            }
+        }
+
+        // Pass 2: Evaluate + and - left-to-right
+        var total = numbers[0]
+        for (j in ops.indices) {
+            val right = numbers[j + 1]
+            when (ops[j]) {
+                '+' -> total += right
+                '-' -> total -= right
+            }
         }
         total.toLong().coerceAtLeast(0L)
     } catch (e: Exception) {
@@ -2507,6 +2532,7 @@ fun ThermalReceiptDialog(
     }
     val lineItems = remember(order.itemsPayload) { CartLineItem.deserializeList(order.itemsPayload) }
     val orderMediaEnum = remember(order.orderMedia) { OrderMedia.fromLabel(order.orderMedia) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -2867,6 +2893,13 @@ fun ThermalReceiptDialog(
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
                         onClick = {
+                            printThermalReceiptViaSystem(
+                                context = context,
+                                order = order,
+                                waktuPesanan = waktuPesanan,
+                                lineItems = lineItems,
+                                orderMediaEnum = orderMediaEnum
+                            )
                             onPrinted()
                             onDismiss()
                         },
@@ -2884,6 +2917,68 @@ fun ThermalReceiptDialog(
                 }
             }
         }
+    }
+}
+
+private fun printThermalReceiptViaSystem(
+    context: android.content.Context,
+    order: com.example.data.model.OrderRecord,
+    waktuPesanan: String,
+    lineItems: List<CartLineItem>,
+    orderMediaEnum: OrderMedia
+) {
+    try {
+        val branchDisplay = com.example.data.model.formatCleanBranchName(order.branchId, order.branchId)
+        val itemsHtml = if (lineItems.isNotEmpty()) {
+            lineItems.joinToString("") { item ->
+                val title = buildString {
+                    append("${item.qty}x ${item.primaryItemName}")
+                    if (item.secondaryItemName.isNotBlank()) append(" + ${item.secondaryItemName}")
+                    if (item.flavourName.isNotBlank()) append(" (${item.flavourName})")
+                    if (item.addOnNames.isNotEmpty()) append(" [${item.addOnNames.joinToString(", ")}]")
+                }
+                val price = WaffleoViewModel.formatIdr(item.lineTotalFor(orderMediaEnum))
+                "<tr><td style='padding:2px 0;'>$title</td><td style='text-align:right;padding:2px 0;'>$price</td></tr>"
+            }
+        } else {
+            "<tr><td>${order.itemsSummary}</td><td style='text-align:right;'>${WaffleoViewModel.formatIdr(order.totalAmount)}</td></tr>"
+        }
+        val html = """
+            <html><body style="font-family:monospace;font-size:11px;width:58mm;margin:0;padding:8px;">
+            <div style="text-align:center;font-weight:bold;font-size:15px;">WAFFLEO</div>
+            <div style="text-align:center;font-size:10px;margin-bottom:6px;">Cabang $branchDisplay</div>
+            <hr style="border-top:1px dashed #888;"/>
+            <div>No. Order: ${order.displayOrderNumber}</div>
+            <div>Waktu: $waktuPesanan</div>
+            <div>Kasir: ${order.createdBy}</div>
+            <div>Kanal: ${order.orderMedia}</div>
+            <hr style="border-top:1px dashed #888;"/>
+            <table style="width:100%;font-size:11px;">$itemsHtml</table>
+            <hr style="border-top:1px dashed #888;"/>
+            <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:13px;">
+                <span>TOTAL: ${WaffleoViewModel.formatIdr(order.totalAmount)}</span>
+            </div>
+            <div>Metode: ${order.paymentMethod} (${if (order.isPaid) "LUNAS" else "BELUM LUNAS"})</div>
+            <hr style="border-top:1px dashed #888;"/>
+            <div style="text-align:center;margin-top:6px;font-weight:bold;">*** TERIMA KASIH ***</div>
+            <div style="text-align:center;font-size:9px;">Selamat Menikmati :) • Instagram: waffleo.pgk</div>
+            </body></html>
+        """.trimIndent()
+
+        val webView = android.webkit.WebView(context)
+        webView.webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: android.webkit.WebView, url: String?) {
+                val printManager = context.getSystemService(android.content.Context.PRINT_SERVICE) as? android.print.PrintManager
+                if (printManager != null) {
+                    val jobName = "Waffleo_Struk_${order.displayOrderNumber}"
+                    val adapter = view.createPrintDocumentAdapter(jobName)
+                    printManager.print(jobName, adapter, android.print.PrintAttributes.Builder().build())
+                }
+            }
+        }
+        webView.loadDataWithBaseURL(null, html, "text/HTML", "UTF-8", null)
+    } catch (_: Exception) {
+        // Fallback: no-op if WebView or PrintManager is unavailable on device
     }
 }
 

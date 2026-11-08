@@ -50,6 +50,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -333,7 +334,7 @@ class WaffleoViewModel(
         pendingSet: Set<String> = _pendingSyncKeys.value
     ): Boolean {
         return (order.id.isNotBlank() && order.id in deletedOrderSet) ||
-            (order.orderNumber.isNotBlank() && order.orderNumber in deletedOrderSet) ||
+            (order.id.isBlank() && order.orderNumber.isNotBlank() && order.orderNumber in deletedOrderSet) ||
             "order_delete:${order.id}" in pendingSet
     }
 
@@ -365,11 +366,10 @@ class WaffleoViewModel(
                 val pending = _pendingSyncKeys.value
                 val cleanedCloud = cloudList.filter { rec ->
                     rec.id !in WaffleoSeedData.legacyDummyCatalogIds &&
-                        rec.recordType != "INGREDIENT" &&
                         !isBranchDeleted(rec.branchId, deletedSet) &&
                         "catalog_delete:${rec.id}" !in pending
                 }
-                if (cleanedCloud.isEmpty() || cleanedCloud.none { it.id == "waffle_polos" }) {
+                if (cleanedCloud.isEmpty()) {
                     localList.filterNot { isBranchDeleted(it.branchId, deletedSet) || "catalog_delete:${it.id}" in pending }
                 } else {
                     val mergedMap = LinkedHashMap<String, CatalogRecord>()
@@ -882,6 +882,8 @@ class WaffleoViewModel(
     private val cleanedOrphanBranches = mutableSetOf<String>()
 
     init {
+        com.example.data.model.BranchNameRegistry.registerAll(_branchProfiles.value)
+
         // Purge any locally cached records belonging to explicitly deleted branches and perform cache sanitization on startup
         performLocalCacheSanitization()
 
@@ -942,6 +944,11 @@ class WaffleoViewModel(
         if (filteredTxs.size != _allMoneyTransactions.value.size) {
             _allMoneyTransactions.value = filteredTxs
             localStore?.saveMoneyTransactions(filteredTxs)
+        }
+        val filteredBookmarks = _allMoneyBookmarks.value.filterNot { isBranchDeleted(it.branchId, deletedSet) }
+        if (filteredBookmarks.size != _allMoneyBookmarks.value.size) {
+            _allMoneyBookmarks.value = filteredBookmarks
+            localStore?.saveMoneyBookmarks(filteredBookmarks)
         }
     }
 
@@ -1035,6 +1042,7 @@ class WaffleoViewModel(
 
         val updatedProfiles = profileMap.values.filterNot { isBranchDeleted(it.branchId, deletedSet) }
         val updatedBranches = updatedProfiles.map { it.branchId.trim() }.distinctBy { it.lowercase() }.ifEmpty { listOf("Global") }
+        com.example.data.model.BranchNameRegistry.registerAll(updatedProfiles)
 
         if (updatedBranches != _branches.value || updatedProfiles != _branchProfiles.value) {
             _branches.value = updatedBranches
@@ -1047,6 +1055,7 @@ class WaffleoViewModel(
         // 1. Live Cloud Branch Profiles Mirror (Authoritative across all devices)
         viewModelScope.launch {
             repository.observeBranchProfiles(workspaceId).catch { emit(emptyList()) }.collect { cloudProfiles ->
+                com.example.data.model.BranchNameRegistry.registerAll(cloudProfiles)
                 if (cloudProfiles.none { it.branchId.equals("Global", ignoreCase = true) } && isNetworkOnline.value) {
                     val globalProf = _branchProfiles.value.firstOrNull { it.branchId.equals("Global", ignoreCase = true) }
                         ?: WaffleoSeedData.defaultBranchProfiles.first()
@@ -1174,7 +1183,6 @@ class WaffleoViewModel(
 
                 val cleanedCloud = cloudCatalog.filter { rec ->
                     rec.id !in WaffleoSeedData.legacyDummyCatalogIds &&
-                        rec.recordType != "INGREDIENT" &&
                         !isBranchDeleted(rec.branchId, deletedSet) &&
                         "catalog_delete:${rec.id}" !in pending
                 }
@@ -1423,25 +1431,23 @@ class WaffleoViewModel(
         hasSeededCloud = true
         viewModelScope.launch {
             try {
-                repository.observeCatalog(workspaceId).catch { emit(emptyList()) }.collect { existing ->
-                    val legacyItems = existing.filter {
-                        it.id in WaffleoSeedData.legacyDummyCatalogIds || it.recordType == "INGREDIENT"
+                val existing = repository.observeCatalog(workspaceId).catch { emit(emptyList()) }.first()
+                val legacyItems = existing.filter {
+                    it.id in WaffleoSeedData.legacyDummyCatalogIds
+                }
+                if (legacyItems.isNotEmpty()) {
+                    legacyItems.forEach { oldItem ->
+                        repository.deleteCatalogItem(workspaceId, oldItem.id)
                     }
-                    if (legacyItems.isNotEmpty()) {
-                        legacyItems.forEach { oldItem ->
-                            repository.deleteCatalogItem(workspaceId, oldItem.id)
-                        }
+                }
+                val needsRealMasterData = existing.isEmpty() || existing.size == legacyItems.size
+                if (needsRealMasterData) {
+                    val masterRecords = _localSeededCatalog.value.ifEmpty {
+                        WaffleoSeedData.defaultCatalogRecords(workspaceId)
                     }
-                    val needsRealMasterData = existing.isEmpty() || legacyItems.isNotEmpty() || existing.none { it.id == "waffle_polos" }
-                    if (needsRealMasterData) {
-                        val masterRecords = _localSeededCatalog.value.ifEmpty {
-                            WaffleoSeedData.defaultCatalogRecords(workspaceId)
-                        }
-                        masterRecords.forEach { item ->
-                            repository.saveCatalogItem(workspaceId, item.copy(userId = workspaceId))
-                        }
+                    masterRecords.forEach { item ->
+                        repository.saveCatalogItem(workspaceId, item.copy(userId = workspaceId))
                     }
-                    return@collect
                 }
             } catch (e: Exception) {
                 Log.w("WaffleoVM", "Initial seed check skipped: ${e.message}")
@@ -1497,7 +1503,7 @@ class WaffleoViewModel(
         val devAccount = _staffAccounts.value.firstOrNull {
             it.role == StaffRole.DEVELOPER &&
                 it.username.equals(cleanUser, ignoreCase = true) &&
-                it.password == passwordInput
+                com.example.data.model.PasswordHasher.verifyPassword(passwordInput, it.password)
         }
         return devAccount != null || (cleanUser.equals("developer", ignoreCase = true) && passwordInput == "developer")
     }
@@ -1507,7 +1513,7 @@ class WaffleoViewModel(
         return _staffAccounts.value.firstOrNull {
             it.branchId.equals(branch, ignoreCase = true) &&
                 it.username.equals(cleanUser, ignoreCase = true) &&
-                it.password == passwordInput
+                com.example.data.model.PasswordHasher.verifyPassword(passwordInput, it.password)
         }
     }
 
@@ -1521,7 +1527,7 @@ class WaffleoViewModel(
         val devAccount = _staffAccounts.value.firstOrNull {
             it.role == StaffRole.DEVELOPER &&
                 it.username.equals(cleanUser, ignoreCase = true) &&
-                it.password == passwordInput
+                com.example.data.model.PasswordHasher.verifyPassword(passwordInput, it.password)
         }
         if (devAccount != null || (cleanUser.equals("developer", ignoreCase = true) && passwordInput == "developer")) {
             updateAndPersistSession(
@@ -1611,7 +1617,11 @@ class WaffleoViewModel(
             return Result.failure(IllegalArgumentException("Cabang 'Global' adalah Master System dan tidak dapat dihapus."))
         }
         val isDevValid = (devUsername.trim().equals("developer", ignoreCase = true) && devPassword.trim() == "developer") ||
-            _staffAccounts.value.any { it.role == StaffRole.DEVELOPER && it.username.equals(devUsername.trim(), ignoreCase = true) && it.password == devPassword.trim() }
+            _staffAccounts.value.any {
+                it.role == StaffRole.DEVELOPER &&
+                    it.username.equals(devUsername.trim(), ignoreCase = true) &&
+                    com.example.data.model.PasswordHasher.verifyPassword(devPassword.trim(), it.password)
+            }
 
         if (!isDevValid) {
             showBanner("Username / Password salah")
@@ -1622,20 +1632,29 @@ class WaffleoViewModel(
         val resolvedBranchId = profile?.branchId ?: cleanBranch
         val resolvedName = getBranchDisplayName(resolvedBranchId)
 
+        val isUuidBranch = resolvedBranchId.trim().lowercase().startsWith("branch_")
         val baseSlug = resolvedName.lowercase().removePrefix("cabang ").trim()
-        val branchVariants = setOf(
-            resolvedBranchId.lowercase(),
-            resolvedName.lowercase(),
-            baseSlug,
-            "cabang $baseSlug"
-        )
+        val branchVariants = if (isUuidBranch) {
+            setOf(resolvedBranchId.trim().lowercase())
+        } else {
+            setOf(
+                resolvedBranchId.lowercase(),
+                resolvedName.lowercase(),
+                baseSlug,
+                "cabang $baseSlug"
+            )
+        }
         val deletedSet = _deletedBranchIds.value + branchVariants
         _deletedBranchIds.value = deletedSet
         localStore?.saveDeletedBranchIds(deletedSet)
 
         fun isBranchMatch(candidate: String): Boolean {
             val c = candidate.trim().lowercase()
-            return c in branchVariants || c == resolvedBranchId.lowercase() || c.removePrefix("cabang ").trim() == baseSlug
+            return if (isUuidBranch) {
+                c == resolvedBranchId.trim().lowercase()
+            } else {
+                c in branchVariants || c == resolvedBranchId.lowercase() || c.removePrefix("cabang ").trim() == baseSlug
+            }
         }
 
         // Capture items to delete BEFORE updating StateFlows
@@ -1664,6 +1683,14 @@ class WaffleoViewModel(
         val updatedTxs = _allMoneyTransactions.value.filterNot { isBranchMatch(it.branchId) }
         _allMoneyTransactions.value = updatedTxs
         localStore?.saveMoneyTransactions(updatedTxs)
+
+        val updatedBookmarks = _allMoneyBookmarks.value.filterNot { isBranchMatch(it.branchId) }
+        _allMoneyBookmarks.value = updatedBookmarks
+        localStore?.saveMoneyBookmarks(updatedBookmarks)
+
+        val updatedLogs = _localAuditLogs.value.filterNot { isBranchMatch(it.branchId) }
+        _localAuditLogs.value = updatedLogs
+        localStore?.saveAuditLogs(updatedLogs)
 
         // Purge local store caches for this branch
         localStore?.purgeBranchDataLocally(resolvedBranchId)
@@ -1790,6 +1817,15 @@ class WaffleoViewModel(
 
         // Generate a 100% unique UUID Branch ID for this new branch entity
         val newBranchId = "branch_" + java.util.UUID.randomUUID().toString()
+        com.example.data.model.BranchNameRegistry.registerBranch(newBranchId, cleanBranch)
+
+        // Ensure any legacy name-based tombstone for this branch name is cleared
+        val baseClean = cleanBranch.lowercase().removePrefix("cabang ").trim()
+        val cleanedDeletedSet = _deletedBranchIds.value - setOf(cleanBranch.lowercase(), baseClean, "cabang $baseClean")
+        if (cleanedDeletedSet != _deletedBranchIds.value) {
+            _deletedBranchIds.value = cleanedDeletedSet
+            localStore?.saveDeletedBranchIds(cleanedDeletedSet)
+        }
 
         // 1. Register branch & branch profile locally
         _branches.value = (_branches.value + newBranchId).distinctBy { it.lowercase() }
@@ -1811,7 +1847,7 @@ class WaffleoViewModel(
         val ownerAcc = StaffAccount(
             branchId = newBranchId,
             username = cleanOwnerUser,
-            password = ownerPassword,
+            password = com.example.data.model.PasswordHasher.hashPassword(ownerPassword),
             role = StaffRole.OWNER,
             displayName = ownerName.trim().ifEmpty { "Owner $cleanBranch" },
             email = ownerEmail.trim(),
@@ -3049,7 +3085,7 @@ class WaffleoViewModel(
                 // Increment usedCount on applied promos so quota is updated immediately
                 if (discount > 0L && promoEvaluation.appliedPromos.isNotEmpty()) {
                     promoEvaluation.appliedPromos.forEach { applied ->
-                        incrementPromoUsageCount(applied.promoId, delta = 1)
+                        incrementPromoUsageCount(applied.promoId, delta = applied.appliedPacketCount.coerceAtLeast(1))
                     }
                 }
                 if (isBackdatedCart) {
@@ -3262,6 +3298,11 @@ class WaffleoViewModel(
                     effectivePaidAmount > 0L -> if (_cartPaymentMethod.value != "Belum Bayar") _cartPaymentMethod.value else currentEditing.paymentMethod
                     else -> "Belum Bayar"
                 }
+                val (editSplitCash, editSplitQris) = resolveSplitCashAndQrisFromLedger(
+                    ledger = ledger,
+                    fallbackCash = if (_cartSplitCash.value > 0L) _cartSplitCash.value else currentEditing.splitCashAmount,
+                    fallbackQris = if (_cartSplitQris.value > 0L) _cartSplitQris.value else currentEditing.splitQrisAmount
+                )
 
                 val updatedOrder = currentEditing.copy(
                     orderMedia = media.label,
@@ -3278,8 +3319,8 @@ class WaffleoViewModel(
                     isPaid = isStillPaid,
                     shortfallAmount = shortfall,
                     changeDueAmount = changeDue,
-                    splitCashAmount = if (_cartSplitCash.value > 0L) _cartSplitCash.value else currentEditing.splitCashAmount,
-                    splitQrisAmount = if (_cartSplitQris.value > 0L) _cartSplitQris.value else currentEditing.splitQrisAmount,
+                    splitCashAmount = editSplitCash,
+                    splitQrisAmount = editSplitQris,
                     createdBy = _session.value.username,
                     paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(ledger),
                     orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
@@ -3290,6 +3331,16 @@ class WaffleoViewModel(
                     },
                     updatedAt = com.google.firebase.Timestamp(Date(nowMs))
                 )
+
+                // Reconcile promo usage if promo changed during order edit
+                if (currentEditing.discountAmount > 0L && currentEditing.promoCode.isNotBlank()) {
+                    restorePromoQuotaForOrder(currentEditing)
+                }
+                if (discount > 0L && promoEvaluation.appliedPromos.isNotEmpty()) {
+                    promoEvaluation.appliedPromos.forEach { applied ->
+                        incrementPromoUsageCount(applied.promoId, delta = applied.appliedPacketCount.coerceAtLeast(1))
+                    }
+                }
 
                 updateLocalOrderItem(updatedOrder)
                 syncOrderToCloud(updatedOrder, isNew = false)
@@ -3519,6 +3570,12 @@ class WaffleoViewModel(
                 else -> order.totalAmount
             }
 
+            val (resolvedSplitCash, resolvedSplitQris) = resolveSplitCashAndQrisFromLedger(
+                ledger = ledger,
+                fallbackCash = if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitCash else order.splitCashAmount,
+                fallbackQris = if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitQris else order.splitQrisAmount
+            )
+
             val updated = order.copy(
                 isPaid = true,
                 paidAmount = order.totalAmount,
@@ -3526,8 +3583,8 @@ class WaffleoViewModel(
                 paymentMethod = resolvedPaymentMethod,
                 shortfallAmount = 0L,
                 changeDueAmount = changeAmount,
-                splitCashAmount = if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitCash else order.splitCashAmount,
-                splitQrisAmount = if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitQris else order.splitQrisAmount,
+                splitCashAmount = resolvedSplitCash,
+                splitQrisAmount = resolvedSplitQris,
                 paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(ledger),
                 orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
                 createdAt = order.createdAt ?: com.google.firebase.Timestamp(resolveOrderTimestampDate(order)),
@@ -3540,8 +3597,8 @@ class WaffleoViewModel(
                 put("paidAmount", order.totalAmount)
                 put("paymentMethod", resolvedPaymentMethod)
                 put("changeDue", order.changeDueAmount)
-                put("splitCash", if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitCash else order.splitCashAmount)
-                put("splitQris", if (paymentMethod.contains("Cash + QRIS", ignoreCase = true)) splitQris else order.splitQrisAmount)
+                put("splitCash", resolvedSplitCash)
+                put("splitQris", resolvedSplitQris)
             }.toString()
             logAuditEvent(
                 actionType = "ORDER_PAID",
@@ -3699,9 +3756,7 @@ class WaffleoViewModel(
                 val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
                 if (usedQty > 0.0) {
                     val newStock = (ing.stockQty - usedQty).coerceAtLeast(0.0)
-                    val updatedIng = ing.copy(stockQty = newStock)
-                    updateLocalSeedCatalogItem(updatedIng)
-                    syncCatalogItemToCloud(updatedIng)
+                    adjustIngredientStock(ing, -usedQty, newStock)
                     deductedDetails.add("${ing.name}: -${usedQty.toInt()} ${ing.stockUnit} (Sisa: ${newStock.toInt()} ${ing.stockUnit})")
                 }
             }
@@ -3884,9 +3939,7 @@ class WaffleoViewModel(
                     val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
                     if (usedQty > 0.0) {
                         val restoredStock = ing.stockQty + usedQty
-                        val updatedIng = ing.copy(stockQty = restoredStock)
-                        updateLocalSeedCatalogItem(updatedIng)
-                        syncCatalogItemToCloud(updatedIng)
+                        adjustIngredientStock(ing, usedQty, restoredStock)
                         restoredIngredients.add("${ing.name}: +${usedQty.toInt()} ${ing.stockUnit} (Total: ${restoredStock.toInt()} ${ing.stockUnit})")
                     }
                 }
@@ -3952,9 +4005,7 @@ class WaffleoViewModel(
                         val perDrink = meta.optDouble("usagePerDrink", 0.0)
                         val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
                         if (usedQty > 0.0) {
-                            val updatedIng = ing.copy(stockQty = ing.stockQty + usedQty)
-                            updateLocalSeedCatalogItem(updatedIng)
-                            syncCatalogItemToCloud(updatedIng)
+                            adjustIngredientStock(ing, usedQty, ing.stockQty + usedQty)
                         }
                     }
                 }
@@ -3964,8 +4015,11 @@ class WaffleoViewModel(
 
                 // 1. Record permanent deletion tombstones FIRST so reactive streams never re-emit the order
                 val tombstones = buildSet {
-                    if (order.id.isNotBlank()) add(order.id.trim())
-                    if (order.orderNumber.isNotBlank()) add(order.orderNumber.trim())
+                    if (order.id.isNotBlank()) {
+                        add(order.id.trim())
+                    } else if (order.orderNumber.isNotBlank()) {
+                        add(order.orderNumber.trim())
+                    }
                 }
                 val updatedDeletedIds = _deletedOrderIds.value + tombstones
                 _deletedOrderIds.value = updatedDeletedIds
@@ -3982,8 +4036,11 @@ class WaffleoViewModel(
 
                 // 3. Remove from local orders cache immediately
                 val updatedLocal = _localOrders.value.filterNot {
-                    (order.id.isNotBlank() && it.id == order.id) ||
-                        (order.orderNumber.isNotBlank() && it.orderNumber == order.orderNumber)
+                    if (order.id.isNotBlank()) {
+                        it.id == order.id
+                    } else {
+                        order.orderNumber.isNotBlank() && it.orderNumber == order.orderNumber && it.branchId.equals(order.branchId, ignoreCase = true)
+                    }
                 }
                 _localOrders.value = updatedLocal
                 localStore?.saveOrders(updatedLocal)
@@ -4528,6 +4585,7 @@ class WaffleoViewModel(
         val trimmedNew = newName.trim()
         if (trimmedOld.isBlank() || trimmedNew.isBlank()) return
 
+        val activeBranch = _session.value.branchId
         if (targetType == "MENU") {
             val currentList = _customMenuCategories.value.toMutableList()
             val idx = currentList.indexOfFirst { areCategoriesMatching(it, trimmedOld) }
@@ -4541,7 +4599,7 @@ class WaffleoViewModel(
             localStore?.saveCustomCategories(deduplicated, _customModifierCategories.value)
 
             val updatedCatalog = _localSeededCatalog.value.map { rec ->
-                if (rec.recordType == "MENU_ITEM" && areCategoriesMatching(rec.category, trimmedOld)) {
+                if (rec.recordType == "MENU_ITEM" && rec.branchId.equals(activeBranch, ignoreCase = true) && areCategoriesMatching(rec.category, trimmedOld)) {
                     val updatedRec = rec.copy(category = trimmedNew)
                     syncCatalogItemToCloud(updatedRec)
                     updatedRec
@@ -4592,7 +4650,7 @@ class WaffleoViewModel(
             localStore?.saveCustomCategories(_customMenuCategories.value, deduplicated)
 
             val updatedCatalog = _localSeededCatalog.value.map { rec ->
-                if (rec.recordType == "MODIFIER" && areCategoriesMatching(rec.category, trimmedOld)) {
+                if (rec.recordType == "MODIFIER" && rec.branchId.equals(activeBranch, ignoreCase = true) && areCategoriesMatching(rec.category, trimmedOld)) {
                     val updatedRec = rec.copy(category = trimmedNew)
                     syncCatalogItemToCloud(updatedRec)
                     updatedRec
@@ -4791,8 +4849,9 @@ class WaffleoViewModel(
         localStore?.saveCustomSubCategories(currentMap)
         syncWorkspaceSettingsToCloud()
 
+        val activeBranch = _session.value.branchId
         val updatedCatalog = _localSeededCatalog.value.map { rec ->
-            if (areCategoriesMatching(rec.category, trimmedCat) && areCategoriesMatching(rec.subCategory, trimmedOld)) {
+            if (rec.branchId.equals(activeBranch, ignoreCase = true) && areCategoriesMatching(rec.category, trimmedCat) && areCategoriesMatching(rec.subCategory, trimmedOld)) {
                 val updatedRec = rec.withSubCategory(trimmedNew)
                 syncCatalogItemToCloud(updatedRec)
                 updatedRec
@@ -4827,8 +4886,9 @@ class WaffleoViewModel(
         localStore?.saveCustomSubCategories(currentMap)
         syncWorkspaceSettingsToCloud()
 
+        val activeBranch = _session.value.branchId
         val updatedCatalog = _localSeededCatalog.value.map { rec ->
-            if (areCategoriesMatching(rec.category, trimmedCat) && areCategoriesMatching(rec.subCategory, trimmedSub)) {
+            if (rec.branchId.equals(activeBranch, ignoreCase = true) && areCategoriesMatching(rec.category, trimmedCat) && areCategoriesMatching(rec.subCategory, trimmedSub)) {
                 val updatedRec = rec.withSubCategory("")
                 syncCatalogItemToCloud(updatedRec)
                 updatedRec
@@ -4902,7 +4962,13 @@ class WaffleoViewModel(
             showBanner("Username 'developer' bersifat mutlak dan tidak dapat ditambahkan sebagai akun cabang.")
             return
         }
-        val newAcc = StaffAccount(cleanBranch, cleanUser, password, role, displayName.trim().ifEmpty { cleanUser })
+        val newAcc = StaffAccount(
+            cleanBranch,
+            cleanUser,
+            com.example.data.model.PasswordHasher.hashPassword(password),
+            role,
+            displayName.trim().ifEmpty { cleanUser }
+        )
         _staffAccounts.value = _staffAccounts.value + newAcc
         localStore?.saveStaffAccounts(_staffAccounts.value)
         syncStaffAccountToCloud(newAcc)
@@ -4959,7 +5025,7 @@ class WaffleoViewModel(
 
         val updatedAcc = oldAcc.copy(
             displayName = newDisplayName.trim().ifEmpty { oldAcc.displayName },
-            password = if (newPassword.isNotBlank()) newPassword.trim() else oldAcc.password,
+            password = if (newPassword.isNotBlank()) com.example.data.model.PasswordHasher.hashPassword(newPassword.trim()) else oldAcc.password,
             role = newRole,
             email = newEmail.trim(),
             phone = newPhone.trim()
@@ -5104,6 +5170,11 @@ class WaffleoViewModel(
                 tx.feeAmount > 0L
         }
         if (pastTransfer != null) {
+            if (pastTransfer.feeAccountChoice.equals("TO", ignoreCase = true) ||
+                pastTransfer.feeAccountChoice.equals("FROM", ignoreCase = true)
+            ) {
+                return TransferFeeHistoryConfig(pastTransfer.feeAmount, pastTransfer.feeAccountChoice.uppercase(Locale.ROOT))
+            }
             val feeExpense = _allMoneyTransactions.value.firstOrNull { tx ->
                 tx.type == MoneyTransactionType.EXPENSE &&
                     tx.dateKey == pastTransfer.dateKey &&
@@ -5268,9 +5339,11 @@ class WaffleoViewModel(
                 MoneyTransactionType.TRANSFER -> {
                     val fromKey = tx.accountGroup to tx.accountName
                     val toKey = tx.toAccountGroup to tx.toAccountName
-                    map[fromKey] = (map[fromKey] ?: 0L) - tx.amount - tx.feeAmount
+                    val feeTarget = tx.feeAccountChoice.ifBlank { _transferFeeAccountChoice.value }
+                    val deductFromTo = feeTarget.equals("TO", ignoreCase = true) && tx.toAccountName.isNotBlank()
+                    map[fromKey] = (map[fromKey] ?: 0L) - tx.amount - (if (deductFromTo) 0L else tx.feeAmount)
                     if (tx.toAccountName.isNotBlank()) {
-                        map[toKey] = (map[toKey] ?: 0L) + tx.amount
+                        map[toKey] = (map[toKey] ?: 0L) + tx.amount - (if (deductFromTo) tx.feeAmount else 0L)
                     }
                 }
             }
@@ -5349,14 +5422,25 @@ class WaffleoViewModel(
             val feeAmt = calculateOrderPlatformFee(ord, allCatalog)
             val netAmt = calculateOrderNetAmount(ord, allCatalog)
 
-            // Penanganan Khusus Split Payment: Cash + QRIS
+            // Penanganan Khusus Split Payment: Cash + QRIS (baik langsung maupun pelunasan bertahap Tunai + QRIS)
             val isSplitCashQris = ord.paymentMethod.contains("Cash + QRIS", ignoreCase = true) ||
-                (ord.splitQrisAmount > 0L && ord.splitCashAmount > 0L)
+                (ord.splitQrisAmount > 0L && ord.splitCashAmount > 0L) ||
+                ((ord.paymentMethod.contains("Cash", ignoreCase = true) || ord.paymentMethod.contains("Tunai", ignoreCase = true)) &&
+                    ord.paymentMethod.contains("QRIS", ignoreCase = true))
 
             if (isSplitCashQris) {
                 val isBca = ord.paymentMethod.contains("BCA", ignoreCase = true)
                 val targetBank = if (isBca) "BCA" else "Bank Mandiri"
-                val qrisPart = if (ord.splitQrisAmount > 0L) ord.splitQrisAmount.coerceAtMost(netAmt) else (netAmt / 2)
+                val (ledgerCash, ledgerQris) = resolveSplitCashAndQrisFromLedger(
+                    ledger = ord.getPaymentLedger(),
+                    fallbackCash = ord.splitCashAmount,
+                    fallbackQris = ord.splitQrisAmount
+                )
+                val qrisPart = when {
+                    ledgerQris > 0L -> ledgerQris.coerceAtMost(netAmt)
+                    ord.splitQrisAmount > 0L -> ord.splitQrisAmount.coerceAtMost(netAmt)
+                    else -> netAmt / 2
+                }
                 val cashPart = (netAmt - qrisPart).coerceAtLeast(0L)
 
                 if (cashPart > 0L) {
@@ -5739,8 +5823,7 @@ class WaffleoViewModel(
                             val newStock = (ing.stockQty - usedQty).coerceAtLeast(0.0)
                             val updatedIng = ing.copy(stockQty = newStock)
                             currentIngredients[idx] = updatedIng
-                            updateLocalSeedCatalogItem(updatedIng)
-                            syncCatalogItemToCloud(updatedIng)
+                            adjustIngredientStock(ing, -usedQty, newStock)
                         }
                     }
                 }
@@ -5886,14 +5969,21 @@ class WaffleoViewModel(
         }
 
         // Handle non-cash cancelled orders that were paid: cash was refunded to buyer, so record Transfer From Cash To Bank Account
-        if (triggeredByStoreClose) {
-            val cancelledPaidOnDate = orders.value.filter { ord ->
-                val isPureCash = (ord.paymentMethod.contains("Tunai", ignoreCase = true) || ord.paymentMethod.contains("Cash", ignoreCase = true)) &&
-                    !ord.paymentMethod.contains("QRIS", ignoreCase = true) &&
-                    !ord.paymentMethod.contains("Transfer", ignoreCase = true)
-                ord.status == "CANCELLED" && ord.isPaid && ord.totalAmount > 0L && !isPureCash &&
-                    dateFmt.format(resolveOrderTimestampDate(ord)) == targetDateKey
-            }
+        val hasExistingPosSyncOnDate = currentMoneyList.any {
+            it.dateKey == targetDateKey &&
+                it.branchId.equals(activeBranch, ignoreCase = true) &&
+                (it.isAutoPosSync || it.id.startsWith("v1_pos_sync_") || it.id.startsWith("v1_refund_transfer_"))
+        }
+        val cancelledPaidOnDate = orders.value.filter { ord ->
+            val isPureCash = (ord.paymentMethod.contains("Tunai", ignoreCase = true) || ord.paymentMethod.contains("Cash", ignoreCase = true)) &&
+                !ord.paymentMethod.contains("QRIS", ignoreCase = true) &&
+                !ord.paymentMethod.contains("Transfer", ignoreCase = true)
+            ord.status == "CANCELLED" && ord.isPaid && ord.totalAmount > 0L && !isPureCash &&
+                dateFmt.format(resolveOrderTimestampDate(ord)) == targetDateKey
+        }
+        val validRefundIdsOnDate = cancelledPaidOnDate.map { "v1_refund_transfer_${it.orderNumber}_${targetDateKey}" }.toSet()
+
+        if (triggeredByStoreClose || hasExistingPosSyncOnDate) {
             cancelledPaidOnDate.forEach { cOrd ->
                 val targetBank = when {
                     cOrd.paymentMethod.contains("Mandiri", ignoreCase = true) -> "Bank Mandiri"
@@ -5930,17 +6020,18 @@ class WaffleoViewModel(
             }
         }
 
-        // If all orders for a channel on targetDateKey were cancelled/removed, clean up any orphaned POS sync records on targetDateKey
+        // If all orders for a channel on targetDateKey were cancelled/removed, or if a cancelled order was erased/deleted, clean up orphaned POS sync / refund records on targetDateKey
         val activeRecapPairs = recapItems.filter { it.netAmount > 0L }.map { it.subCategory.lowercase() to it.accountName.lowercase() }.toSet()
         for (i in currentMoneyList.indices.reversed()) {
             val tx = currentMoneyList[i]
-            if (tx.dateKey == targetDateKey &&
-                tx.branchId.equals(activeBranch, ignoreCase = true) &&
-                (tx.isAutoPosSync || tx.id.startsWith("v1_pos_sync_")) &&
-                tx.type == MoneyTransactionType.INCOME
-            ) {
-                val pair = tx.subCategory.lowercase() to tx.accountName.lowercase()
-                if (pair !in activeRecapPairs) {
+            if (tx.dateKey == targetDateKey && tx.branchId.equals(activeBranch, ignoreCase = true)) {
+                if ((tx.isAutoPosSync || tx.id.startsWith("v1_pos_sync_")) && tx.type == MoneyTransactionType.INCOME) {
+                    val pair = tx.subCategory.lowercase() to tx.accountName.lowercase()
+                    if (pair !in activeRecapPairs) {
+                        val removed = currentMoneyList.removeAt(i)
+                        deletedIds.add(removed.id)
+                    }
+                } else if (tx.id.startsWith("v1_refund_transfer_") && tx.id !in validRefundIdsOnDate) {
                     val removed = currentMoneyList.removeAt(i)
                     deletedIds.add(removed.id)
                 }
@@ -5975,6 +6066,50 @@ class WaffleoViewModel(
         if (!silent) {
             val totalRecapped = recapItems.sumOf { it.netAmount }
             showBanner("Sync Keuangan Berhasil: $affectedCount kanal penjualan (${formatIdr(totalRecapped)}) tersinkronisasi (1 transaksi/kanal).")
+        }
+    }
+
+    private fun resolveSplitCashAndQrisFromLedger(
+        ledger: List<OrderPaymentLedgerEntry>,
+        fallbackCash: Long,
+        fallbackQris: Long
+    ): Pair<Long, Long> {
+        var netCash = 0L
+        var netQris = 0L
+        ledger.forEach { entry ->
+            when {
+                entry.paymentType == "CHANGE_REFUND_RETURN" -> {
+                    netCash = (netCash - entry.amount).coerceAtLeast(0L)
+                }
+                entry.paymentMethod.contains("QRIS", ignoreCase = true) &&
+                    !entry.paymentMethod.contains("Cash + QRIS", ignoreCase = true) -> {
+                    netQris += entry.amount.coerceAtLeast(0L)
+                }
+                entry.paymentMethod.contains("Tunai", ignoreCase = true) ||
+                    entry.paymentMethod.equals("Cash", ignoreCase = true) -> {
+                    netCash += entry.amount.coerceAtLeast(0L)
+                }
+            }
+        }
+        return if (netCash > 0L && netQris > 0L) {
+            netCash to netQris
+        } else {
+            fallbackCash to fallbackQris
+        }
+    }
+
+    private fun adjustIngredientStock(ing: CatalogRecord, deltaQty: Double, updatedStockQty: Double) {
+        val updatedIng = ing.copy(stockQty = updatedStockQty)
+        updateLocalSeedCatalogItem(updatedIng)
+        if ((_isMaintenanceModeOn.value && isDeveloperSession()) || isBranchDeleted(updatedIng.branchId)) return
+        val key = "catalog:${updatedIng.id}"
+        clearPendingSyncKey("catalog_delete:${updatedIng.id}")
+        markPendingSyncKey(key)
+        if (!isCloudAuthenticated || !isNetworkOnline.value) return
+        viewModelScope.launch {
+            val atomicOk = repository.adjustCatalogStockAtomic(workspaceId, updatedIng.id, deltaQty)
+            val ok = if (atomicOk) true else repository.saveCatalogItem(workspaceId, updatedIng.copy(userId = workspaceId))
+            if (ok) clearPendingSyncKey(key)
         }
     }
 
@@ -6180,11 +6315,11 @@ class WaffleoViewModel(
                 put("transferFeeAccountChoice", _transferFeeAccountChoice.value)
 
                 val recappedArr = JSONArray()
-                _recappedOrderIds.value.take(500).forEach { recappedArr.put(it) }
+                _recappedOrderIds.value.toList().takeLast(500).forEach { recappedArr.put(it) }
                 put("recappedOrderIds", recappedArr)
 
                 val deletedOrdersArr = JSONArray()
-                _deletedOrderIds.value.take(1000).forEach { deletedOrdersArr.put(it) }
+                _deletedOrderIds.value.toList().takeLast(1000).forEach { deletedOrdersArr.put(it) }
                 put("deletedOrderIds", deletedOrdersArr)
             }.toString()
 
@@ -6200,8 +6335,8 @@ class WaffleoViewModel(
         try {
             val obj = JSONObject(raw)
 
-            // Always merge grow-only order deletion tombstones even if local workspace_settings sync is pending,
-            // preventing any offline/online race from resurrecting deleted orders or overwriting tombstones.
+            // Always merge grow-only sets (deletedOrderIds, deletedBranchIds, recappedOrderIds) even if local workspace_settings sync is pending,
+            // preventing any offline/online race from resurrecting deleted orders/branches or un-recapping orders.
             obj.optJSONArray("deletedOrderIds")?.let { arr ->
                 val cloudDeletedOrders = LinkedHashSet<String>()
                 for (i in 0 until arr.length()) {
@@ -6220,7 +6355,18 @@ class WaffleoViewModel(
                 }
             }
 
-            if ("workspace_settings:all" in _pendingSyncKeys.value) return
+            obj.optJSONArray("recappedOrderIds")?.let { arr ->
+                val cloudRecapped = LinkedHashSet<String>()
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i).trim()
+                    if (s.isNotBlank()) cloudRecapped.add(s)
+                }
+                val mergedRecapped = _recappedOrderIds.value + cloudRecapped
+                if (mergedRecapped != _recappedOrderIds.value) {
+                    _recappedOrderIds.value = mergedRecapped
+                    localStore?.saveRecappedOrderIds(mergedRecapped)
+                }
+            }
 
             obj.optJSONArray("deletedBranchIds")?.let { arr ->
                 val cloudDeleted = mutableSetOf<String>()
@@ -6233,7 +6379,7 @@ class WaffleoViewModel(
                     .filter { it.startsWith("branch_delete:") }
                     .flatMap {
                         val slug = it.removePrefix("branch_delete:").trim().lowercase()
-                        listOf(slug, "cabang $slug")
+                        if (slug.startsWith("branch_")) listOf(slug) else listOf(slug, "cabang $slug")
                     }
                     .toSet()
                 // Remove any branch that currently has a pending creation in flight
@@ -6245,13 +6391,15 @@ class WaffleoViewModel(
                         listOf(b, base, "cabang $base")
                     }
                     .toSet()
-                val authoritativeDeleted = (cloudDeleted + pendingLocalDeletes) - pendingCreations
+                val authoritativeDeleted = (_deletedBranchIds.value + cloudDeleted + pendingLocalDeletes) - pendingCreations
                 if (authoritativeDeleted != _deletedBranchIds.value) {
                     _deletedBranchIds.value = authoritativeDeleted
                     localStore?.saveDeletedBranchIds(authoritativeDeleted)
                     purgeDeletedBranchesFromLocalState(authoritativeDeleted)
                 }
             }
+
+            if ("workspace_settings:all" in _pendingSyncKeys.value) return
 
             obj.optJSONArray("bankAccounts")?.let { arr ->
                 val list = mutableListOf<BankAccountDetail>()
@@ -6437,6 +6585,89 @@ class WaffleoViewModel(
                 if (ok) clearPendingSyncKey(key)
             }
         }
+    }
+
+    fun exportBranchBackupDataJson(): String {
+        val activeBranch = _session.value.branchId
+        val displayBranch = getBranchDisplayName(activeBranch)
+        val nowIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date())
+        return JSONObject().apply {
+            put("backupVersion", "1.0")
+            put("exportedAt", nowIso)
+            put("branchId", activeBranch)
+            put("branchName", displayBranch)
+            put("exportedBy", _session.value.username)
+
+            val catalogArr = JSONArray()
+            catalogRecords.value.forEach { rec ->
+                catalogArr.put(
+                    JSONObject().apply {
+                        put("id", rec.id)
+                        put("recordType", rec.recordType)
+                        put("branchId", rec.branchId)
+                        put("name", rec.name)
+                        put("category", rec.category)
+                        put("priceWalkIn", rec.priceWalkIn)
+                        put("priceGrabFood", rec.priceGrabFood)
+                        put("priceGoFood", rec.priceGoFood)
+                        put("priceShopeeFood", rec.priceShopeeFood)
+                        put("stockQty", rec.stockQty)
+                        put("stockUnit", rec.stockUnit)
+                        put("costPerUnit", rec.costPerUnit)
+                        put("isActive", rec.isActive)
+                    }
+                )
+            }
+            put("catalogCount", catalogArr.length())
+            put("catalog", catalogArr)
+
+            val ordersArr = JSONArray()
+            orders.value.forEach { ord ->
+                ordersArr.put(
+                    JSONObject().apply {
+                        put("id", ord.id)
+                        put("orderNumber", ord.displayOrderNumber)
+                        put("orderMedia", ord.orderMedia)
+                        put("customerData", ord.customerData)
+                        put("itemsSummary", ord.itemsSummary)
+                        put("subtotalAmount", ord.subtotalAmount)
+                        put("discountAmount", ord.discountAmount)
+                        put("totalAmount", ord.totalAmount)
+                        put("paidAmount", ord.paidAmount)
+                        put("paymentMethod", ord.paymentMethod)
+                        put("status", ord.status)
+                        put("createdAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(resolveOrderTimestampDate(ord)))
+                    }
+                )
+            }
+            put("ordersCount", ordersArr.length())
+            put("orders", ordersArr)
+
+            val moneyArr = JSONArray()
+            moneyTransactions.value.forEach { tx ->
+                moneyArr.put(
+                    JSONObject().apply {
+                        put("id", tx.id)
+                        put("type", tx.type.name)
+                        put("dateKey", tx.dateKey)
+                        put("timeFormatted", tx.timeFormatted)
+                        put("amount", tx.amount)
+                        put("transferFee", tx.transferFee)
+                        put("feeAccountChoice", tx.feeAccountChoice)
+                        put("category", tx.category)
+                        put("subCategory", tx.subCategory)
+                        put("accountGroup", tx.accountGroup)
+                        put("accountName", tx.accountName)
+                        put("toAccountGroup", tx.toAccountGroup)
+                        put("toAccountName", tx.toAccountName)
+                        put("note", tx.note)
+                        put("description", tx.description)
+                    }
+                )
+            }
+            put("moneyTransactionsCount", moneyArr.length())
+            put("moneyTransactions", moneyArr)
+        }.toString(2)
     }
 
     companion object {

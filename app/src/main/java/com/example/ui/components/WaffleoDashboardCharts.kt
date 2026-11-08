@@ -923,7 +923,7 @@ fun RechartsHourlyRevenueChartCard(
     var statMode by remember(selectedPeriod) { mutableStateOf(HourlyStatMode.MEAN) }
 
     val activeHourlySeries = remember(hourlySeries, doneOrders, statMode, isMultiDayPeriod, calculateNet) {
-        if (calculateNet != null) {
+        if (calculateNet != null && statMode != HourlyStatMode.MEAN) {
             buildHourlySalesSeries(
                 doneOrders = doneOrders,
                 statMode = statMode,
@@ -2989,17 +2989,25 @@ fun TopMenuPerformanceBarCard(
 
         doneOrders.forEach { order ->
             val media = com.example.data.model.OrderMedia.fromLabel(order.orderMedia)
-            val parsed = CartLineItem.deserializeList(order.itemsPayload)
+            val parsed = order.parsedLineItems
             parsed.forEach { line ->
                 // Match against currently existing MENU_ITEM in catalog (by ID first, then by name)
                 val matchedMenu = menuRecords.firstOrNull { it.id == line.primaryItemId }
                     ?: menuRecords.firstOrNull { it.name.equals(line.primaryItemName, ignoreCase = true) }
+                val matchedSecondaryMenu = if ((line.isHalfHalf || line.isDoubleTopping) &&
+                    (line.secondaryItemId.isNotBlank() || line.secondaryItemName.isNotBlank())
+                ) {
+                    menuRecords.firstOrNull { line.secondaryItemId.isNotBlank() && it.id == line.secondaryItemId }
+                        ?: menuRecords.firstOrNull { it.name.equals(line.secondaryItemName, ignoreCase = true) }
+                } else null
 
                 // If the menu item or its category was deleted from Menu settings, skip it
                 if (matchedMenu != null && activeMenuCategories.any { areCategoriesMatching(it, matchedMenu.category) }) {
                     val menuId = matchedMenu.id
+                    val lineRev = line.lineTotalFor(media)
+                    val primaryRev = if (matchedSecondaryMenu != null && matchedSecondaryMenu.id != menuId) lineRev / 2 else lineRev
                     qtyByMenuId[menuId] = (qtyByMenuId[menuId] ?: 0) + line.qty
-                    revByMenuId[menuId] = (revByMenuId[menuId] ?: 0L) + line.lineTotalFor(media)
+                    revByMenuId[menuId] = (revByMenuId[menuId] ?: 0L) + primaryRev
 
                     val canonicalCat = activeMenuCategories.firstOrNull { areCategoriesMatching(it, matchedMenu.category) }
                         ?: matchedMenu.category
@@ -3017,6 +3025,17 @@ fun TopMenuPerformanceBarCard(
                             modCountMap[addOn] = (modCountMap[addOn] ?: 0) + line.qty
                         }
                     }
+                }
+
+                if (matchedSecondaryMenu != null &&
+                    matchedSecondaryMenu.id != matchedMenu?.id &&
+                    activeMenuCategories.any { areCategoriesMatching(it, matchedSecondaryMenu.category) }
+                ) {
+                    val secId = matchedSecondaryMenu.id
+                    val lineRev = line.lineTotalFor(media)
+                    val secRev = lineRev - (lineRev / 2)
+                    qtyByMenuId[secId] = (qtyByMenuId[secId] ?: 0) + line.qty
+                    revByMenuId[secId] = (revByMenuId[secId] ?: 0L) + secRev
                 }
             }
         }

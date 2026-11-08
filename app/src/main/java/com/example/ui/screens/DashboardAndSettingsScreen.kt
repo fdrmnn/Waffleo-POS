@@ -879,12 +879,11 @@ fun SettingsScreen(
 
     var isReorderModeActive by remember { mutableStateOf(false) }
 
-    // Note: Tab "Stok" (sectionIndex = 2) disimpan dulu (shelved) sesuai instruksi pemilik proyek
     val tabs = remember {
         listOf(
             SettingsTabMeta(0, "Menu", Icons.Default.RestaurantMenu),
             SettingsTabMeta(1, "Modifier", Icons.Default.Tune),
-            // SettingsTabMeta(2, "Stok", Icons.Default.Inventory2), // Disimpan dulu (shelved)
+            SettingsTabMeta(2, "Stok", Icons.Default.Inventory2),
             SettingsTabMeta(3, "Promo", Icons.Default.ConfirmationNumber),
             SettingsTabMeta(4, "Pengaturan Lainnya", Icons.Default.Storefront),
             SettingsTabMeta(5, "Audit Log", Icons.Default.History)
@@ -1505,6 +1504,52 @@ fun SettingsScreen(
                             }
 
                             Spacer(modifier = Modifier.weight(1f))
+
+                            if (session.role == StaffRole.OWNER || session.role == StaffRole.DEVELOPER) {
+                                val context = androidx.compose.ui.platform.LocalContext.current
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = SoftGoldHighlight,
+                                    border = BorderStroke(1.dp, DeepCaramelGold.copy(alpha = 0.55f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable {
+                                            val jsonBackup = viewModel.exportBranchBackupDataJson()
+                                            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                type = "application/json"
+                                                putExtra(android.content.Intent.EXTRA_SUBJECT, "Backup Data Waffleo POS - Cabang ${viewModel.getBranchDisplayName(session.branchId)}")
+                                                putExtra(android.content.Intent.EXTRA_TEXT, jsonBackup)
+                                            }
+                                            try {
+                                                context.startActivity(android.content.Intent.createChooser(shareIntent, "Ekspor Backup Data JSON"))
+                                            } catch (_: Exception) {
+                                                viewModel.showBanner("Data backup siap diekspor (${jsonBackup.length} bytes).")
+                                            }
+                                        }
+                                        .testTag("settings_export_backup_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Inventory2,
+                                            contentDescription = "Ekspor Backup",
+                                            tint = DeepCaramelGold,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Ekspor Backup Data (JSON)",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = RichEspressoPrimary
+                                        )
+                                    }
+                                }
+                            }
 
                             Surface(
                                 shape = RoundedCornerShape(14.dp),
@@ -2726,6 +2771,7 @@ fun SettingsScreen(
         AddStaffAccountDialog(
             existingBranches = selectableBranches,
             defaultBranch = session.branchId,
+            actorRole = session.role,
             onDismiss = { showAddStaffModal = false },
             onConfirm = { br, u, p, r, dn ->
                 viewModel.addBranchAndAccount(br, u, p, r, dn)
@@ -2836,10 +2882,12 @@ fun SettingsScreen(
 
     selectedGroupedLog?.let { group ->
         val relatedOrder = allOrdersList.firstOrNull {
-            it.orderNumber.equals(group.entityId, ignoreCase = true) ||
-            it.displayOrderNumber.equals(group.entityId, ignoreCase = true) ||
-            it.id.equals(group.entityId, ignoreCase = true) ||
-            (group.entityId.isNotBlank() && it.orderNumber.contains(group.entityId, ignoreCase = true))
+            (session.role == StaffRole.DEVELOPER || it.branchId.equals(session.branchId, ignoreCase = true)) && (
+                it.orderNumber.equals(group.entityId, ignoreCase = true) ||
+                    it.displayOrderNumber.equals(group.entityId, ignoreCase = true) ||
+                    it.id.equals(group.entityId, ignoreCase = true) ||
+                    (group.entityId.isNotBlank() && it.orderNumber.contains(group.entityId, ignoreCase = true))
+                )
         }
         AuditLogDetailTimelineDialog(
             group = group,
@@ -5022,10 +5070,15 @@ private fun CatalogEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         WaffleoSoftTextField(
                             value = stockQty,
-                            onValueChange = { stockQty = it.filter { ch -> ch.isDigit() } },
+                            onValueChange = { input ->
+                                val filtered = input.filter { ch -> ch.isDigit() || ch == '.' }
+                                if (filtered.count { it == '.' } <= 1) {
+                                    stockQty = filtered
+                                }
+                            },
                             label = "Jumlah Stok",
                             placeholder = "1000",
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.weight(1f)
                         )
                         WaffleoSoftTextField(
@@ -5614,15 +5667,18 @@ private fun CatalogEditorDialog(
                             onClick = {
                                 if (name.isNotBlank()) {
                                     val baseRecord = initialRecord.withSubCategory(subCategory)
-                                    val grabPrice = platformPricesMap["GrabFood"] ?: platformPricesMap["Grab"] ?: initialRecord.priceGrabFood
-                                    val goPrice = platformPricesMap["GoFood"] ?: platformPricesMap["Go"] ?: initialRecord.priceGoFood
-                                    val shopeePrice = platformPricesMap["ShopeeFood"] ?: platformPricesMap["Shopee"] ?: initialRecord.priceShopeeFood
+                                    val isBranchCfg = initialRecord.recordType == "BRANCH_CONFIG"
+                                    val cfgFee = grab.toLongOrNull() ?: 0L
+                                    val grabPrice = if (isBranchCfg) cfgFee else (platformPricesMap["GrabFood"] ?: platformPricesMap["Grab"] ?: initialRecord.priceGrabFood)
+                                    val goPrice = if (isBranchCfg) cfgFee else (platformPricesMap["GoFood"] ?: platformPricesMap["Go"] ?: initialRecord.priceGoFood)
+                                    val shopeePrice = if (isBranchCfg) cfgFee else (platformPricesMap["ShopeeFood"] ?: platformPricesMap["Shopee"] ?: initialRecord.priceShopeeFood)
 
-                                    val updatedMetadata = if (initialRecord.recordType == "BRANCH_CONFIG") {
+                                    val updatedMetadata = if (isBranchCfg) {
                                         val pct = walkIn.toLongOrNull() ?: 0L
-                                        val fee = grab.toLongOrNull() ?: 0L
+                                        val fee = cfgFee
                                         val cleanBrName = com.example.data.model.formatCleanBranchName(initialRecord.branchId, initialRecord.branchId)
-                                        """{"commissionPercent":$pct,"perOrderFee":$fee,"bankAccount":"Rekening Bank BCA (Cabang $cleanBrName)"}"""
+                                        val chosenBank = subCategory.ifBlank { "BCA" }
+                                        """{"commissionPercent":$pct,"perOrderFee":$fee,"subCategory":${org.json.JSONObject.quote(chosenBank)},"bankAccount":"Rekening Bank $chosenBank (Cabang $cleanBrName)"}"""
                                     } else if (initialRecord.recordType in listOf("MENU_ITEM", "MODIFIER")) {
                                         baseRecord.withPlatformPrices(platformPricesMap, selectedModifiersMap)
                                     } else {
@@ -5752,6 +5808,8 @@ private fun CatalogEditorDialog(
         val calcTitle = if (target == "WALK_IN") "Hitung Harga Di tempat" else "Hitung Harga $target"
         val initialVal = if (target == "WALK_IN") {
             walkIn.toLongOrNull() ?: 0L
+        } else if (target == "GRABFOOD" && initialRecord.recordType == "BRANCH_CONFIG") {
+            grab.toLongOrNull() ?: 0L
         } else {
             platformPricesMap[target] ?: initialRecord.priceForPlatformName(target)
         }
@@ -5763,6 +5821,11 @@ private fun CatalogEditorDialog(
             onConfirm = { calculatedAmount ->
                 if (target == "WALK_IN") {
                     walkIn = calculatedAmount.toString()
+                } else if (target == "GRABFOOD" && initialRecord.recordType == "BRANCH_CONFIG") {
+                    val digits = calculatedAmount.toString()
+                    grab = digits
+                    gofood = digits
+                    shopee = digits
                 } else {
                     platformPricesMap = platformPricesMap + (target to calculatedAmount)
                 }
@@ -5882,6 +5945,7 @@ private fun CatalogPriceWithCalcField(
 private fun AddStaffAccountDialog(
     existingBranches: List<String>,
     defaultBranch: String,
+    actorRole: StaffRole = StaffRole.DEVELOPER,
     onDismiss: () -> Unit,
     onConfirm: (String, String, String, StaffRole, String) -> Unit
 ) {
@@ -5897,8 +5961,10 @@ private fun AddStaffAccountDialog(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
-    val selectableRoles = remember { listOf(StaffRole.OWNER, StaffRole.SUPERVISOR, StaffRole.KASIR) }
-    var role by remember { mutableStateOf(StaffRole.KASIR) }
+    val selectableRoles = remember(actorRole) {
+        actorRole.assignableRoles().filter { it != StaffRole.DEVELOPER }.ifEmpty { listOf(StaffRole.KASIR) }
+    }
+    var role by remember(selectableRoles) { mutableStateOf(selectableRoles.last()) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -6447,7 +6513,7 @@ private fun AuditLogNarrativeDetailView(
                                         }
                                     }
 
-                                    val linePrice = item.unitPriceWalkIn * item.qty
+                                    val linePrice = item.lineTotalFor(com.example.data.model.OrderMedia.fromLabel(mediaLabel))
                                     if (linePrice > 0L) {
                                         Text(
                                             text = WaffleoViewModel.formatIdr(linePrice),
@@ -7449,7 +7515,8 @@ private fun AuditLogDetailTimelineDialog(
 
                                 // Status Transaksi
                                 val (stBg, stFg, stLabel) = when {
-                                    relatedOrder.status == "CANCELLED" -> Triple(SoftTerracottaBg, TerracottaDanger, "Pesanan Dihapus")
+                                    relatedOrder.status == "ERASED" -> Triple(SoftTerracottaBg, TerracottaDanger, "Dihapus (Erased)")
+                                    relatedOrder.status == "CANCELLED" -> Triple(SoftTerracottaBg, TerracottaDanger, "Dibatalkan")
                                     relatedOrder.status == "DONE" -> Triple(SoftSageBg, MatchaSageSuccess, "Selesai (Done!)")
                                     relatedOrder.isPrepared -> Triple(SoftAmberBg, HoneyAmberWarning, "Dimasak (Prepared)")
                                     else -> Triple(SoftGoldHighlight, DeepCaramelGold, "Antrean Aktif")

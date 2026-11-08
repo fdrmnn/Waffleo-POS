@@ -232,7 +232,14 @@ fun onGoogleSignInClicked(
 
     scope.launch {
         try {
-            val result = credentialManager.getCredential(context as Activity, request)
+            val activity = generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+                .filterIsInstance<Activity>()
+                .firstOrNull()
+            if (activity == null) {
+                onAuthError("Activity context tidak tersedia untuk Google Sign-In.")
+                return@launch
+            }
+            val result = credentialManager.getCredential(activity, request)
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
@@ -452,11 +459,6 @@ fun BranchPosLoginScreen(
     var password by remember { mutableStateOf("") }
     var rememberMe by remember { mutableStateOf(true) }
     var loginError by remember { mutableStateOf<String?>(null) }
-
-    // State untuk Pop-up Verifikasi 1x Akun Google Cabang (hanya muncul saat 1st login cabang di device ini)
-    var showOneTimeBranchGoogleDialog by remember { mutableStateOf(false) }
-    var isVerifyingGoogle by remember { mutableStateOf(false) }
-    var googleVerifyError by remember { mutableStateOf<String?>(null) }
 
     val isNetworkOnline by viewModel.isNetworkOnline.collectAsState()
     val isCloudConnected = isNetworkOnline
@@ -686,211 +688,6 @@ fun BranchPosLoginScreen(
             }
         }
     }
-
-    // Modal Verifikasi 1x Akun Google Cabang (Hanya saat 1st Login Cabang pada Perangkat Ini)
-    if (showOneTimeBranchGoogleDialog) {
-        val displayBranch = viewModel.getBranchDisplayName(selectedBranch)
-        Dialog(onDismissRequest = { if (!isVerifyingGoogle) showOneTimeGoogleDialogDismiss { showOneTimeBranchGoogleDialog = false } }) {
-            Card(
-                shape = RoundedCornerShape(26.dp),
-                colors = CardDefaults.cardColors(containerColor = ElevatedIvoryCard),
-                elevation = CardDefaults.cardElevation(defaultElevation = 14.dp),
-                modifier = Modifier.widthIn(min = 360.dp, max = 520.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(22.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = SoftGoldHighlight,
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudDone,
-                                    contentDescription = null,
-                                    tint = RichEspressoPrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Verifikasi 1x Akun Google Cabang $displayBranch",
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = RichEspressoPrimary
-                            )
-                            Text(
-                                text = "Otorisasi Pertama Perangkat untuk Sinkronisasi Cloud Cabang $displayBranch",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = DeepCaramelGold
-                            )
-                        }
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = SoftOatSurface,
-                        border = BorderStroke(1.dp, SubtleSandBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "Perangkat ini baru pertama kali digunakan untuk mengakses Cabang $displayBranch.",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = RichEspressoPrimary
-                            )
-                            Text(
-                                text = "• Cukup lakukan 1x verifikasi Akun Google Cabang $displayBranch pada perangkat ini.\n• Selanjutnya, seluruh akun (@owner, @spv, @kasir) di Cabang $displayBranch cukup memasukkan Username & Password dan langsung masuk otomatis tanpa perlu login Google lagi.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MutedCocoaText
-                            )
-                        }
-                    }
-
-                    if (googleVerifyError != null) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = SoftTerracottaBg,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = googleVerifyError.orEmpty(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = TerracottaDanger
-                                )
-                                Text(
-                                    text = "Jika perangkat/emulator belum memiliki akun Google di pengaturan Android, Anda tetap dapat mengikat otorisasi 1x perangkat cabang di bawah ini:",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MutedCocoaText
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = SoftGoldHighlight,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(38.dp)
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable {
-                                            viewModel.markBranchGoogleAuthorized(
-                                                selectedBranch,
-                                                "google.${selectedBranch.lowercase()}@waffleo.pos"
-                                            )
-                                            showOneTimeBranchGoogleDialog = false
-                                            viewModel.loginStaff(selectedBranch, username, password, rememberMe)
-                                        }
-                                        .testTag("one_time_branch_device_bind_btn")
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "Aktifkan Izin 1x Akun Google Cabang $displayBranch & Masuk",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            fontWeight = FontWeight.Bold,
-                                            color = RichEspressoPrimary
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = SoftOatSurface,
-                            modifier = Modifier
-                                .height(42.dp)
-                                .clip(RoundedCornerShape(50))
-                                .clickable(enabled = !isVerifyingGoogle) {
-                                    showOneTimeBranchGoogleDialog = false
-                                }
-                        ) {
-                            Box(modifier = Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {
-                                Text("Batal", style = MaterialTheme.typography.labelLarge, color = RichEspressoPrimary)
-                            }
-                        }
-
-                        Button(
-                            onClick = {
-                                isVerifyingGoogle = true
-                                googleVerifyError = null
-                                onGoogleSignInClicked(
-                                    context = context,
-                                    credentialManager = credentialManager,
-                                    onAuthSuccess = {
-                                        isVerifyingGoogle = false
-                                        val emailLabel = Firebase.auth.currentUser?.email
-                                            ?: "Akun Google Cabang $displayBranch"
-                                        viewModel.markBranchGoogleAuthorized(selectedBranch, emailLabel)
-                                        showOneTimeBranchGoogleDialog = false
-                                        viewModel.loginStaff(selectedBranch, username, password, rememberMe)
-                                    },
-                                    onAuthError = { msg ->
-                                        isVerifyingGoogle = false
-                                        googleVerifyError = msg
-                                    },
-                                    scope = scope,
-                                    onAuthCancelled = {
-                                        isVerifyingGoogle = false
-                                    }
-                                )
-                            },
-                            enabled = !isVerifyingGoogle,
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = RichEspressoPrimary,
-                                contentColor = SoftGoldHighlight
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp)
-                                .testTag("one_time_branch_google_verify_btn")
-                        ) {
-                            if (isVerifyingGoogle) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    color = SoftGoldHighlight,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(Icons.Default.CloudDone, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Verifikasi 1x Google Cabang $displayBranch",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private inline fun showOneTimeGoogleDialogDismiss(onDismiss: () -> Unit) {
-    onDismiss()
 }
 
 /**
@@ -919,8 +716,6 @@ fun WaffleoLandscapeMainShell(
     val catalogRecords by viewModel.catalogRecords.collectAsState()
     val bannerMessage by viewModel.statusBannerMessage.collectAsState()
     val isNetworkOnline by viewModel.isNetworkOnline.collectAsState()
-    val pendingSyncKeys by viewModel.pendingSyncKeys.collectAsState()
-    val isSyncingOfflineQueue by viewModel.isSyncingOfflineQueue.collectAsState()
 
     val activeOrderCount = remember(allOrders) { allOrders.count { it.status == "ACTIVE" } }
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -1068,9 +863,9 @@ fun WaffleoLandscapeMainShell(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                imageVector = if (isCloudSignedIn) Icons.Default.CloudDone else Icons.Default.CloudSync,
+                                imageVector = if (isNetworkOnline) Icons.Default.CloudDone else Icons.Default.CloudSync,
                                 contentDescription = "Cloud Sync Status",
-                                tint = if (isCloudSignedIn) MatchaSageSuccess else ChampagneGoldAccent,
+                                tint = if (isNetworkOnline) MatchaSageSuccess else ChampagneGoldAccent,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -2390,6 +2185,7 @@ fun DeveloperBranchPortalScreen(
                     if (res.isSuccess) {
                         selectedBranchToDelete = null
                     }
+                    res
                 }
             )
         }
@@ -2785,11 +2581,12 @@ fun CreateNewBranchDialog(
 private fun DeleteBranchConfirmationDialog(
     branchId: String,
     onDismiss: () -> Unit,
-    onConfirmDelete: (username: String, password: String) -> Unit
+    onConfirmDelete: (username: String, password: String) -> Result<Unit>
 ) {
     var devUsername by remember { mutableStateOf("") }
     var devPassword by remember { mutableStateOf("") }
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -2868,7 +2665,10 @@ private fun DeleteBranchConfirmationDialog(
                 ) {
                     WaffleoSoftTextField(
                         value = devUsername,
-                        onValueChange = { devUsername = it },
+                        onValueChange = {
+                            devUsername = it
+                            errorMessage = null
+                        },
                         label = "Username Developer",
                         placeholder = "username",
                         modifier = Modifier.weight(1f)
@@ -2876,12 +2676,30 @@ private fun DeleteBranchConfirmationDialog(
 
                     WaffleoSoftTextField(
                         value = devPassword,
-                        onValueChange = { devPassword = it },
+                        onValueChange = {
+                            devPassword = it
+                            errorMessage = null
+                        },
                         label = "Password Developer",
                         placeholder = "password",
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.weight(1f)
                     )
+                }
+
+                if (errorMessage != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = SoftTerracottaBg,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = TerracottaDanger,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -2921,7 +2739,10 @@ private fun DeleteBranchConfirmationDialog(
                                 detectHorizontalDragGestures(
                                     onDragEnd = {
                                         if (dragOffsetPx >= maxOffsetPx * 0.7f) {
-                                            onConfirmDelete(devUsername, devPassword)
+                                            val result = onConfirmDelete(devUsername, devPassword)
+                                            result.onFailure { err ->
+                                                errorMessage = err.message ?: "Username / Password salah"
+                                            }
                                         }
                                         dragOffsetPx = 0f
                                     },

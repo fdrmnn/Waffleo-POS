@@ -593,4 +593,57 @@ class PromoEngineTest {
         assertEquals(0L, cashierBEval.totalDiscountAmount)
         assertFalse(cashierBEval.hasActivePromo)
     }
+
+    @Test
+    fun scenario17_doubleToppingWaffleWithAddOns_correctlySeparatesPolosBasePriceFromAddOnPrice() {
+        val wafflePolos = CatalogRecord(
+            id = "waffle_polos",
+            branchId = "Global",
+            recordType = "MENU_ITEM",
+            category = "Egg Waffle",
+            name = "Polos",
+            priceWalkIn = 13000L,
+            isActive = true
+        )
+        val addonChocochip = CatalogRecord(
+            id = "addon_chocochip",
+            branchId = "Global",
+            recordType = "MODIFIER",
+            category = "Add-on",
+            name = "Chocochip",
+            priceWalkIn = 3000L,
+            isActive = true
+        )
+        // Double Topping Tiramisu (18k) + Chocolate (18k) - Polos (13k) = 23k base + 3k Chocochip = 26k total
+        val doubleToppingCart = listOf(
+            CartLineItem(
+                lineId = "dt_1",
+                category = "Egg Waffle",
+                primaryItemId = waffleTiramisu.id,
+                primaryItemName = "Tiramisu",
+                secondaryItemId = waffleChoco.id,
+                secondaryItemName = "Chocolate",
+                isDoubleTopping = true,
+                addOnNames = listOf("Chocochip"),
+                qty = 1,
+                unitPriceWalkIn = 26000L
+            )
+        )
+        val cfg = PromoConfig(
+            promoType = PromoType.PRODUCT_DISCOUNT,
+            benefitType = PromoBenefitType.DISCOUNT_PERCENT,
+            discountValue = 20L, // 20% off base price (23.000 * 20% = 4.600), excluding 3.000 Chocochip add-on
+            applyToAllProducts = true
+        )
+        val promoRec = buildPromoRecord("promo_dt", "Diskon 20% Base", cfg)
+        val eval = WaffleoPromoEngine.evaluateCartPromos(
+            cartItems = doubleToppingCart,
+            media = OrderMedia.WALK_IN,
+            activeBranchId = "Global",
+            catalog = baseCatalog + wafflePolos + addonChocochip + promoRec
+        )
+        assertEquals(26000L, eval.subtotalBeforeDiscount)
+        assertEquals(4600L, eval.totalDiscountAmount)
+        assertEquals(21400L, eval.finalTotalAmount)
+    }
 }

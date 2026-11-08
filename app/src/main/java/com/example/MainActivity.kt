@@ -93,6 +93,16 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
     // 1-Server Cloud Architecture: Directly enter Waffleo POS Login Cabang without Google Account prompt.
     var showCloudAuthScreen by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        if (auth.currentUser == null) {
+            try {
+                auth.signInAnonymously()
+            } catch (_: Exception) {
+                // Fallback to direct 1-server shared workspace if Anonymous Auth is disabled in Firebase Console
+            }
+        }
+    }
+
     val user = currentUser
     if (showCloudAuthScreen && user == null) {
         GoogleCloudAuthScreen(

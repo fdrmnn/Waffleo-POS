@@ -160,7 +160,8 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                             repetition = doc.getString("repetition") ?: "None",
                             isAutoPosSync = doc.getBoolean("isAutoPosSync") ?: false,
                             posSyncKey = doc.getString("posSyncKey") ?: "",
-                            createdBy = doc.getString("createdBy") ?: "owner"
+                            createdBy = doc.getString("createdBy") ?: "owner",
+                            feeAccountChoice = doc.getString("feeAccountChoice") ?: "FROM"
                         )
                     } catch (e: Exception) {
                         Log.w("WaffleoRepo", "Notice mapping MoneyTransactionRecord ${doc.id}: ${e.message}")
@@ -366,6 +367,7 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                 "stockUnit" to item.stockUnit,
                 "costPerUnit" to item.costPerUnit,
                 "metadataJson" to item.metadataJson.ifBlank { "{}" },
+                "imageUrl" to item.imageUrl,
                 "isActive" to item.isActive,
                 "createdAt" to (item.createdAt ?: FieldValue.serverTimestamp()),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -378,6 +380,27 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
             ack == true
         } catch (e: Exception) {
             Log.e("WaffleoRepo", "Failed to save catalog item ${item.id}", e)
+            false
+        }
+    }
+
+    suspend fun adjustCatalogStockAtomic(userId: String, itemId: String, deltaQty: Double): Boolean {
+        if (userId.isEmpty() || itemId.isEmpty()) return false
+        return try {
+            val docRef = db.collection("users").document(userId).collection("catalog").document(itemId)
+            val task = docRef.update(
+                mapOf(
+                    "stockQty" to FieldValue.increment(deltaQty),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            val ack = withTimeoutOrNull(WRITE_TIMEOUT_MS) {
+                task.await()
+                true
+            }
+            ack == true
+        } catch (e: Exception) {
+            Log.w("WaffleoRepo", "Notice atomic stock update for $itemId (fallback to full upsert): ${e.message}")
             false
         }
     }
@@ -460,6 +483,7 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                 "isAutoPosSync" to tx.isAutoPosSync,
                 "posSyncKey" to tx.posSyncKey,
                 "createdBy" to tx.createdBy,
+                "feeAccountChoice" to tx.feeAccountChoice,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             val task = docRef.set(payload)
@@ -607,18 +631,28 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
     suspend fun deleteBranchCascadeInCloud(userId: String, branchId: String): Boolean {
         val cleanBranch = branchId.trim()
         if (userId.isEmpty() || cleanBranch.isBlank() || cleanBranch.equals("Global", ignoreCase = true)) return false
-        val baseSlug = cleanBranch.lowercase().removePrefix("cabang ").trim()
+        val cleanLower = cleanBranch.lowercase()
+        val isUuidBranch = cleanLower.startsWith("branch_")
+        val baseSlug = cleanLower.removePrefix("cabang ").trim()
         val slugPrefix = baseSlug.replace(Regex("[^a-z0-9]"), "_").take(12) + "_"
-        val branchVariants = setOf(
-            cleanBranch.lowercase(),
-            baseSlug,
-            "cabang $baseSlug"
-        )
+        val branchVariants = if (isUuidBranch) {
+            setOf(cleanLower)
+        } else {
+            setOf(
+                cleanLower,
+                baseSlug,
+                "cabang $baseSlug"
+            )
+        }
 
         fun matchesBranch(candidate: String?): Boolean {
             if (candidate.isNullOrBlank()) return false
             val low = candidate.trim().lowercase()
-            return low in branchVariants || low.removePrefix("cabang ").trim() == baseSlug
+            return if (isUuidBranch) {
+                low == cleanLower
+            } else {
+                low in branchVariants || low.removePrefix("cabang ").trim() == baseSlug
+            }
         }
 
         return try {

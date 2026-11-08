@@ -108,9 +108,32 @@ fun DashboardChannelTransactionsDialog(
         }
     }
 
-    val totalChannelGross = remember(orders) { orders.sumOf { it.totalAmount } }
-    val totalChannelNet = remember(orders, catalog) {
-        orders.sumOf { viewModel.calculateOrderNetAmount(it, catalog) }
+    val totalChannelGross = remember(orders, channelName) {
+        orders.sumOf { ord ->
+            val isSplit = ord.paymentMethod.contains("Cash + QRIS", ignoreCase = true) ||
+                (ord.splitCashAmount > 0L && ord.splitQrisAmount > 0L)
+            when {
+                isSplit && channelName.equals("Cash", ignoreCase = true) ->
+                    if (ord.splitCashAmount > 0L) ord.splitCashAmount else (ord.totalAmount - ord.splitQrisAmount).coerceAtLeast(0L)
+                isSplit && channelName.equals("QRIS", ignoreCase = true) ->
+                    if (ord.splitQrisAmount > 0L) ord.splitQrisAmount else (ord.totalAmount / 2)
+                else -> ord.totalAmount
+            }
+        }
+    }
+    val totalChannelNet = remember(orders, catalog, channelName) {
+        orders.sumOf { ord ->
+            val net = viewModel.calculateOrderNetAmount(ord, catalog)
+            val isSplit = ord.paymentMethod.contains("Cash + QRIS", ignoreCase = true) ||
+                (ord.splitCashAmount > 0L && ord.splitQrisAmount > 0L)
+            when {
+                isSplit && channelName.equals("Cash", ignoreCase = true) ->
+                    if (ord.splitCashAmount > 0L) ord.splitCashAmount.coerceAtMost(net) else (net - ord.splitQrisAmount).coerceAtLeast(0L)
+                isSplit && channelName.equals("QRIS", ignoreCase = true) ->
+                    if (ord.splitQrisAmount > 0L) ord.splitQrisAmount.coerceAtMost(net) else (net / 2)
+                else -> net
+            }
+        }
     }
     val totalChannelFee = (totalChannelGross - totalChannelNet).coerceAtLeast(0L)
 
@@ -756,9 +779,24 @@ fun DashboardProductVariationAnalysisDialog(
         )
     }
 
-    val distinctOrdersCount = remember(variations) {
-        // Approximate distinct orders from variations
-        variations.sumOf { it.orderCount }
+    val distinctOrdersCount = remember(productName, categoryName, doneOrders, catalog) {
+        val cleanParentName = productName.trim()
+        doneOrders.count { order ->
+            val lines = order.parsedLineItems
+            if (lines.isNotEmpty()) {
+                lines.any { line ->
+                    val isPrimary = line.primaryItemName.equals(cleanParentName, ignoreCase = true) ||
+                        (line.primaryItemId.isNotBlank() && catalog.any { it.id == line.primaryItemId && it.name.equals(cleanParentName, ignoreCase = true) })
+                    val isSecondary = (line.isHalfHalf || line.isDoubleTopping) && (
+                        line.secondaryItemName.equals(cleanParentName, ignoreCase = true) ||
+                            (line.secondaryItemId.isNotBlank() && catalog.any { it.id == line.secondaryItemId && it.name.equals(cleanParentName, ignoreCase = true) })
+                        )
+                    isPrimary || isSecondary
+                }
+            } else {
+                order.itemsSummary.contains(cleanParentName, ignoreCase = true)
+            }
+        }
     }
 
     var showAllVariations by remember { mutableStateOf(false) }
