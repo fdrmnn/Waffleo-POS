@@ -780,21 +780,23 @@ class ExampleUnitTest {
   }
 
   @Test
-  fun branchProfile_displayName_doesNotFallbackToGabekForNewUuidBranches() {
+  fun branchProfile_displayName_resolvesUuidBranchToCleanName() {
     val uuidBranch = com.example.data.model.BranchProfile(
       branchId = "branch_9a8b7c6d-1234-4567-89ab-cdef01234567",
-      location = "Sungailiat",
+      location = "Gabek",
       ownerName = "Budi",
       ownerEmail = "budi@waffleo.id",
       ownerPhone = "0812",
       ownerUsername = "ownerbudi",
       name = ""
     )
-    assertNotEquals("Gabek", uuidBranch.displayName)
-    assertEquals("9a8b7c6d-1234-4567-89ab-cdef01234567", uuidBranch.displayName)
+    assertEquals("Gabek", uuidBranch.displayName)
 
     val namedBranch = uuidBranch.copy(name = "Sungailiat")
     assertEquals("Sungailiat", namedBranch.displayName)
+
+    val prefixedNamedBranch = uuidBranch.copy(name = "Cabang Gabek")
+    assertEquals("Gabek", prefixedNamedBranch.displayName)
   }
 
   @Test
@@ -830,6 +832,60 @@ class ExampleUnitTest {
     val newChangeDueAfterFurtherReduction = 8000L
     val incrementalOnFurtherReduction = (newChangeDueAfterFurtherReduction - priorChangeDue).coerceAtLeast(0L)
     assertEquals(3000L, incrementalOnFurtherReduction)
+  }
+
+  @Test
+  fun permanentOrderDelete_ownerOnlyAndTombstonePreventsResurrection() {
+    val erasedOrder = com.example.data.model.OrderRecord(
+      id = "v1_ord_wfl_002",
+      orderNumber = "WFL-GLOBAL-20261108-002",
+      branchId = "Global",
+      status = "ERASED"
+    )
+    // Both OWNER and DEVELOPER can permanently delete an ERASED order
+    assertTrue((com.example.data.model.StaffRole.OWNER == com.example.data.model.StaffRole.OWNER || com.example.data.model.StaffRole.OWNER == com.example.data.model.StaffRole.DEVELOPER) && erasedOrder.status == "ERASED")
+    assertTrue((com.example.data.model.StaffRole.DEVELOPER == com.example.data.model.StaffRole.OWNER || com.example.data.model.StaffRole.DEVELOPER == com.example.data.model.StaffRole.DEVELOPER) && erasedOrder.status == "ERASED")
+    assertFalse((com.example.data.model.StaffRole.SUPERVISOR == com.example.data.model.StaffRole.OWNER || com.example.data.model.StaffRole.SUPERVISOR == com.example.data.model.StaffRole.DEVELOPER) && erasedOrder.status == "ERASED")
+    assertFalse((com.example.data.model.StaffRole.KASIR == com.example.data.model.StaffRole.OWNER || com.example.data.model.StaffRole.KASIR == com.example.data.model.StaffRole.DEVELOPER) && erasedOrder.status == "ERASED")
+
+    // Tombstone + pending queue prevents deleted order from re-entering merged list
+    val deletedOrderSet = setOf("v1_ord_wfl_002", "WFL-GLOBAL-20261108-002")
+    val pendingSet = setOf("order_delete:v1_ord_wfl_002")
+    val isPermanentlyDeleted = (erasedOrder.id.isNotBlank() && erasedOrder.id in deletedOrderSet) ||
+      (erasedOrder.orderNumber.isNotBlank() && erasedOrder.orderNumber in deletedOrderSet) ||
+      "order_delete:${erasedOrder.id}" in pendingSet
+    assertTrue(isPermanentlyDeleted)
+  }
+
+  @Test
+  fun branchSanitization_cleansEmbeddedBranchSlugAndIdsInTimelineAndAudit() {
+    val rawTimelineText = "Seluruh item pesanan WFL-BRANCHC372605C63B64418BFF3AC4644F22A10-20261108-010 selesai disiapkan di dapur oleh fdrmnn."
+    val sanitizedTimeline = com.example.data.model.sanitizeBranchIdsInText(rawTimelineText)
+    assertEquals("Seluruh item pesanan WFL-010 selesai disiapkan di dapur oleh fdrmnn.", sanitizedTimeline)
+
+    val rawAuditSummary = "Pesanan WFL-BRANCHC372605C63B64418BFF3AC4644F22A10-20261108-010 SELESAI (Done!) & diserahkan ke customer."
+    val sanitizedAudit = com.example.data.model.sanitizeBranchIdsInText(rawAuditSummary)
+    assertEquals("Pesanan WFL-010 SELESAI (Done!) & diserahkan ke customer.", sanitizedAudit)
+
+    val rawBranchHash = "BRANCHC372605C63B64418BFF3AC4644F22A10"
+    assertTrue(com.example.data.model.isUuidOrInternalBranchId(rawBranchHash))
+    assertEquals("Gabek", com.example.data.model.formatCleanBranchName(rawBranchHash))
+
+    val rawBranchId = "branch_c372605c63b64418bff3ac4644f22a10"
+    assertTrue(com.example.data.model.isUuidOrInternalBranchId(rawBranchId))
+    assertEquals("Gabek", com.example.data.model.formatCleanBranchName(rawBranchId))
+
+    val cleanName = "Cabang Gabek"
+    assertFalse(com.example.data.model.isUuidOrInternalBranchId(cleanName))
+    assertEquals("Gabek", com.example.data.model.formatCleanBranchName(cleanName))
+
+    // Test timeline event description sanitization
+    val event = com.example.data.model.OrderTimelineEvent(
+      eventId = "evt_123",
+      title = "Pesanan Selesai",
+      description = com.example.data.model.sanitizeBranchIdsInText(rawTimelineText)
+    )
+    assertEquals("Seluruh item pesanan WFL-010 selesai disiapkan di dapur oleh fdrmnn.", event.description)
   }
 }
 

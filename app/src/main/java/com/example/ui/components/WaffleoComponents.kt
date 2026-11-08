@@ -2365,7 +2365,7 @@ fun CancelOrderDialog(
                     .padding(20.dp)
             ) {
                 Text(
-                    text = "Batalkan Pesanan ${order.orderNumber}?",
+                    text = "Batalkan Pesanan ${order.displayOrderNumber}?",
                     style = MaterialTheme.typography.headlineMedium,
                     color = TerracottaDanger
                 )
@@ -2588,7 +2588,7 @@ fun ThermalReceiptDialog(
                             color = Color(0xFF1E1E1E)
                         )
                         Text(
-                            text = "Cabang: ${order.branchId}",
+                            text = "Cabang ${com.example.data.model.formatCleanBranchName(order.branchId, order.branchId)}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                             color = Color(0xFF757575)
                         )

@@ -448,7 +448,36 @@ fun DashboardScreen(
             )
         }
 
-        // 2. Primary Period Revenue Chart (Per Hari / Tanggal / Bulan) displayed FIRST if active
+        // 2. Side-by-Side Cards: Distribusi Kanal & Metode Pembayaran + Menu Terlaris
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                MediaDistributionDonutCard(
+                    doneOrders = doneOrders,
+                    catalog = catalog,
+                    viewModel = viewModel,
+                    periodLabel = selectedPeriod.label,
+                    branchName = viewModel.getBranchDisplayName(sessionState.branchId),
+                    modifier = Modifier.weight(1f)
+                )
+
+                TopMenuPerformanceBarCard(
+                    doneOrders = doneOrders,
+                    catalog = catalog,
+                    customMenuCategories = customMenuCategories,
+                    customModifierCategories = customModifierCategories,
+                    modifierToMenuCategoryMap = modifierToMenuCategoryMap,
+                    periodLabel = selectedPeriod.label,
+                    branchName = viewModel.getBranchDisplayName(sessionState.branchId),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        // 3. Primary Period Revenue Chart (Per Hari / Tanggal / Bulan) displayed if active
         if (secondaryChartInfo != null) {
             item {
                 RechartsPeriodRevenueChartCard(
@@ -461,7 +490,7 @@ fun DashboardScreen(
             }
         }
 
-        // 3. Recharts-Style Interactive Flexible Hourly Revenue Spline & Area Chart displayed SECOND
+        // 4. Recharts-Style Interactive Flexible Hourly Revenue Spline & Area Chart
         item {
             RechartsHourlyRevenueChartCard(
                 hourlySeries = hourlySeries,
@@ -470,35 +499,6 @@ fun DashboardScreen(
                 selectedPeriod = selectedPeriod,
                 customRangeLabel = customRangeLabel
             )
-        }
-
-        // 3. Side-by-Side Visual Charts: Multi-Ring Donut (Media & BCA Settlement) + Menu Terlaris (Semua / Egg Waffle / Minuman)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                MediaDistributionDonutCard(
-                    doneOrders = doneOrders,
-                    catalog = catalog,
-                    viewModel = viewModel,
-                    periodLabel = selectedPeriod.label,
-                    branchName = sessionState.branchId,
-                    modifier = Modifier.weight(1f)
-                )
-
-                TopMenuPerformanceBarCard(
-                    doneOrders = doneOrders,
-                    catalog = catalog,
-                    customMenuCategories = customMenuCategories,
-                    customModifierCategories = customModifierCategories,
-                    modifierToMenuCategoryMap = modifierToMenuCategoryMap,
-                    periodLabel = selectedPeriod.label,
-                    branchName = sessionState.branchId,
-                    modifier = Modifier.weight(1f)
-                )
-            }
         }
 
         // Diagram Kapasitas Stok Bahan Baku Resep disembunyikan sementara sesuai instruksi pemilik proyek
@@ -2467,7 +2467,7 @@ fun SettingsScreen(
                                             }
 
                                             Text(
-                                                text = group.title,
+                                                text = com.example.data.model.sanitizeBranchIdsInText(group.title),
                                                 style = MaterialTheme.typography.titleMedium,
                                                 fontWeight = FontWeight.Bold,
                                                 color = RichEspressoPrimary
@@ -2835,7 +2835,12 @@ fun SettingsScreen(
     }
 
     selectedGroupedLog?.let { group ->
-        val relatedOrder = allOrdersList.firstOrNull { it.orderNumber.equals(group.entityId, ignoreCase = true) }
+        val relatedOrder = allOrdersList.firstOrNull {
+            it.orderNumber.equals(group.entityId, ignoreCase = true) ||
+            it.displayOrderNumber.equals(group.entityId, ignoreCase = true) ||
+            it.id.equals(group.entityId, ignoreCase = true) ||
+            (group.entityId.isNotBlank() && it.orderNumber.contains(group.entityId, ignoreCase = true))
+        }
         AuditLogDetailTimelineDialog(
             group = group,
             relatedOrder = relatedOrder,
@@ -5616,7 +5621,8 @@ private fun CatalogEditorDialog(
                                     val updatedMetadata = if (initialRecord.recordType == "BRANCH_CONFIG") {
                                         val pct = walkIn.toLongOrNull() ?: 0L
                                         val fee = grab.toLongOrNull() ?: 0L
-                                        """{"commissionPercent":$pct,"perOrderFee":$fee,"bankAccount":"Rekening Bank BCA (Cabang ${initialRecord.branchId})"}"""
+                                        val cleanBrName = com.example.data.model.formatCleanBranchName(initialRecord.branchId, initialRecord.branchId)
+                                        """{"commissionPercent":$pct,"perOrderFee":$fee,"bankAccount":"Rekening Bank BCA (Cabang $cleanBrName)"}"""
                                     } else if (initialRecord.recordType in listOf("MENU_ITEM", "MODIFIER")) {
                                         baseRecord.withPlatformPrices(platformPricesMap, selectedModifiersMap)
                                     } else {
@@ -5687,7 +5693,7 @@ private fun CatalogEditorDialog(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Hapus '${initialRecord.name}' (${initialRecord.category}) dari daftar Cabang ${initialRecord.branchId}?",
+                        text = "Hapus '${initialRecord.name}' (${initialRecord.category}) dari daftar Cabang ${com.example.data.model.formatCleanBranchName(initialRecord.branchId, initialRecord.branchId)}?",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MutedCocoaText
                     )
@@ -5911,9 +5917,9 @@ private fun AddStaffAccountDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     WaffleoSingleSelectDropdown(
                         label = "Cabang",
-                        selectedText = branch,
+                        selectedText = "Cabang ${com.example.data.model.formatCleanBranchName(branch, branch)}",
                         options = branchOptions,
-                        optionLabel = { it },
+                        optionLabel = { "Cabang ${com.example.data.model.formatCleanBranchName(it, it)}" },
                         onOptionSelected = { branch = it },
                         modifier = Modifier.weight(1f),
                         testTagPrefix = "add_staff_branch"
@@ -6038,7 +6044,7 @@ private fun EditStaffAccountDialog(
                             fontWeight = FontWeight.Bold,
                             color = RichEspressoPrimary
                         )
-                        val displayBranchName = if (account.branchId.equals("Global", ignoreCase = true)) "Global" else "Gabek"
+                        val displayBranchName = com.example.data.model.formatCleanBranchName(account.branchId, account.branchId)
                         Text(
                             text = "Username : ${account.username} • Cabang $displayBranchName",
                             style = MaterialTheme.typography.labelMedium,
@@ -6078,7 +6084,7 @@ private fun EditStaffAccountDialog(
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text("Cabang (Terkunci)", style = MaterialTheme.typography.labelSmall, color = MutedCocoaText)
-                            Text(account.branchId, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = RichEspressoPrimary)
+                            Text("Cabang ${com.example.data.model.formatCleanBranchName(account.branchId, account.branchId)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = RichEspressoPrimary)
                         }
                     }
                 }
@@ -7329,7 +7335,7 @@ private fun AuditLogDetailTimelineDialog(
                         }
 
                         Text(
-                            text = group.title,
+                            text = com.example.data.model.sanitizeBranchIdsInText(group.title),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = RichEspressoPrimary,
@@ -7342,7 +7348,7 @@ private fun AuditLogDetailTimelineDialog(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "Cabang: ${group.branchId}",
+                                text = "Cabang ${com.example.data.model.formatCleanBranchName(group.branchId, group.branchId)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MutedCocoaText
@@ -7399,7 +7405,7 @@ private fun AuditLogDetailTimelineDialog(
                                         color = RichEspressoPrimary
                                     ) {
                                         Text(
-                                            text = "#${relatedOrder.sequenceIndex} • ${relatedOrder.orderNumber}",
+                                            text = "#${relatedOrder.sequenceIndex} • ${relatedOrder.displayOrderNumber}",
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White,
@@ -7636,7 +7642,7 @@ private fun AuditLogDetailTimelineDialog(
                                     }
 
                                     Text(
-                                        text = subLog.summary,
+                                        text = com.example.data.model.sanitizeBranchIdsInText(subLog.summary),
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
                                         color = RichEspressoPrimary

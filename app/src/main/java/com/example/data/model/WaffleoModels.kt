@@ -147,8 +147,8 @@ data class OrderTimelineEvent(
             eventType = obj.optString("eventType", "ORDER_CREATED"),
             actorUsername = obj.optString("actorUsername", "owner"),
             actorRole = obj.optString("actorRole", "Owner"),
-            title = obj.optString("title", ""),
-            description = obj.optString("description", "")
+            title = sanitizeBranchIdsInText(obj.optString("title", "")),
+            description = sanitizeBranchIdsInText(obj.optString("description", ""))
         )
 
         fun serializeList(list: List<OrderTimelineEvent>): String {
@@ -471,8 +471,10 @@ fun groupAuditLogRecords(rawLogs: List<AuditLogRecord>): List<GroupedAuditLog> {
     for (log in sortedAsc) {
         val groupKey = when {
             // Pengelompokan seluruh siklus pada satu Pesanan
-            (log.actionType.contains("ORDER") || log.entityId.startsWith("WFL-")) && log.entityId.isNotBlank() ->
-                "ORDER_${log.branchId}_${log.entityId}"
+            (log.actionType.contains("ORDER") || log.entityId.startsWith("WFL-")) && log.entityId.isNotBlank() -> {
+                val cleanOrderEntity = sanitizeBranchIdsInText(log.entityId)
+                "ORDER_${log.branchId}_$cleanOrderEntity"
+            }
 
             // Pengelompokan aktivitas Money Manager
             log.actionType.contains("MONEY") ->
@@ -542,18 +544,21 @@ fun groupAuditLogRecords(rawLogs: List<AuditLogRecord>): List<GroupedAuditLog> {
             else -> latestLog.actionType
         }
 
+        val cleanBranchLabel = formatCleanBranchName(branchId, branchId)
+        val sanitizedEntity = sanitizeBranchIdsInText(entityId)
         val title = when {
-            key.startsWith("ORDER") -> "Pesanan $entityId"
+            key.startsWith("ORDER") -> "Pesanan $sanitizedEntity"
             key.startsWith("MONEY") -> "Aktivitas Money Manager"
-            key.startsWith("CATALOG") -> "Menu / Katalog: $entityId"
-            key.startsWith("STOCK") -> "Stok Bahan: $entityId"
-            key.startsWith("STORE") -> "Operasional Toko Cabang $branchId"
-            key.startsWith("STAFF") -> "Akun Staff: $entityId"
-            else -> latestLog.summary
+            key.startsWith("CATALOG") -> "Menu / Katalog: $sanitizedEntity"
+            key.startsWith("STOCK") -> "Stok Bahan: $sanitizedEntity"
+            key.startsWith("STORE") -> "Operasional Toko Cabang $cleanBranchLabel"
+            key.startsWith("STAFF") -> "Akun Staff: $sanitizedEntity"
+            else -> sanitizeBranchIdsInText(latestLog.summary)
         }
 
+        val latestSummarySanitized = sanitizeBranchIdsInText(latestLog.summary)
         val highLevelSummary = if (logs.size == 1) {
-            latestLog.summary
+            latestSummarySanitized
         } else {
             when {
                 key.startsWith("ORDER") -> {
@@ -569,22 +574,22 @@ fun groupAuditLogRecords(rawLogs: List<AuditLogRecord>): List<GroupedAuditLog> {
                     if (payCount > 0) stages.add("${payCount}x Dibayar")
                     stages.add(if (hasErased) "Dihapus (Erased)" else if (hasDone) "Selesai (Done)" else if (hasCancel) "Dibatalkan" else "Diproses")
 
-                    "Alur: ${stages.joinToString(" ➔ ")} • Terakhir: ${latestLog.summary}"
+                    "Alur: ${stages.joinToString(" ➔ ")} • Terakhir: $latestSummarySanitized"
                 }
                 key.startsWith("MONEY") -> {
-                    "Total ${logs.size} riwayat transaksi Money Manager. Terakhir: ${latestLog.summary}"
+                    "Total ${logs.size} riwayat transaksi Money Manager. Terakhir: $latestSummarySanitized"
                 }
                 key.startsWith("CATALOG") -> {
-                    "Total ${logs.size} pembaruan data pada menu '$entityId'. Terakhir: ${latestLog.summary}"
+                    "Total ${logs.size} pembaruan data pada menu '$entityId'. Terakhir: $latestSummarySanitized"
                 }
                 key.startsWith("STOCK") -> {
-                    "Total ${logs.size} pergerakan/penyesuaian stok '$entityId'. Terakhir: ${latestLog.summary}"
+                    "Total ${logs.size} pergerakan/penyesuaian stok '$entityId'. Terakhir: $latestSummarySanitized"
                 }
                 key.startsWith("STORE") -> {
-                    "Total ${logs.size} aktivitas operasional toko cabang $branchId. Terakhir: ${latestLog.summary}"
+                    "Total ${logs.size} aktivitas operasional toko Cabang $cleanBranchLabel. Terakhir: $latestSummarySanitized"
                 }
                 else -> {
-                    "Total ${logs.size} aktivitas pada $entityId. Terakhir: ${latestLog.summary}"
+                    "Total ${logs.size} aktivitas pada $entityId. Terakhir: $latestSummarySanitized"
                 }
             }
         }
@@ -867,6 +872,62 @@ data class DailyChannelRecapItem(
         }
 }
 
+fun isUuidOrInternalBranchId(raw: String): Boolean {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return true
+    if (trimmed.startsWith("branch", ignoreCase = true)) return true
+    val clean = trimmed
+        .removePrefix("Cabang ")
+        .removePrefix("cabang ")
+        .removePrefix("branch_")
+        .removePrefix("BRANCH_")
+        .removePrefix("branch")
+        .removePrefix("BRANCH")
+        .trim()
+    if (clean.isEmpty()) return true
+    if (clean.contains("-") && clean.length >= 20) return true
+    if (clean.length >= 6 && clean.any { it.isDigit() } &&
+        clean.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == '-' || it == '_' }
+    ) {
+        return true
+    }
+    return false
+}
+
+fun formatCleanBranchName(rawName: String, fallbackBranchId: String = ""): String {
+    val trimmed = rawName.trim()
+        .removePrefix("Cabang ")
+        .removePrefix("cabang ")
+        .trim()
+    if (trimmed.isNotBlank() && !isUuidOrInternalBranchId(trimmed)) {
+        return trimmed
+    }
+    val fb = fallbackBranchId.trim()
+        .removePrefix("Cabang ")
+        .removePrefix("cabang ")
+        .trim()
+    if (fb.equals("Global", ignoreCase = true) || trimmed.equals("Global", ignoreCase = true)) {
+        return "Global"
+    }
+    if (fb.isNotBlank() && !isUuidOrInternalBranchId(fb)) {
+        return fb
+    }
+    return "Gabek"
+}
+
+fun sanitizeBranchIdsInText(text: String): String {
+    if (text.isBlank()) return text
+    return text
+        // Format order numbers that contain raw branch slugs or long hashes into clean WFL-010 format
+        .replace(Regex("(?i)WFL-[A-Za-z0-9_-]{10,}-\\d{8}-(\\d+)"), "WFL-$1")
+        .replace(Regex("(?i)WFL-BRANCH[0-9A-Z_-]{6,}-(\\d{8})-(\\d+)"), "WFL-$2")
+        .replace(Regex("(?i)BRANCH[0-9A-F]{8,}"), "Gabek")
+        .replace(Regex("(?i)BRANCH[0-9A-Za-z_]{8,}"), "Gabek")
+        .replace(Regex("(?i)branch_[0-9a-f-]{6,}"), "Gabek")
+        .replace(Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b"), "Gabek")
+        .replace(Regex("(?i)\\b[0-9a-f]{20,}\\b"), "Gabek")
+}
+
 data class BranchProfile(
     val branchId: String,
     val location: String,
@@ -879,12 +940,7 @@ data class BranchProfile(
     val name: String = ""
 ) {
     val displayName: String
-        get() = when {
-            name.isNotBlank() -> name
-            branchId.equals("Global", ignoreCase = true) -> "Global"
-            branchId.contains("gabek", ignoreCase = true) -> "Gabek"
-            else -> branchId.removePrefix("branch_").replace("_", " ").trim().ifBlank { branchId }
-        }
+        get() = formatCleanBranchName(name, branchId)
 }
 
 data class StaffAccount(

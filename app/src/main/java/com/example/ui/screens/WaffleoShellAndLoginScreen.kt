@@ -564,9 +564,9 @@ fun BranchPosLoginScreen(
                 ) {
                     WaffleoSingleSelectDropdown(
                         label = "Pilih Cabang",
-                        selectedText = viewModel.getBranchDisplayName(selectedBranch),
+                        selectedText = "Cabang ${viewModel.getBranchDisplayName(selectedBranch)}",
                         options = branches,
-                        optionLabel = { viewModel.getBranchDisplayName(it) },
+                        optionLabel = { "Cabang ${viewModel.getBranchDisplayName(it)}" },
                         onOptionSelected = {
                             selectedBranch = it
                             loginError = null
@@ -1569,9 +1569,9 @@ fun WaffleoLandscapeMainShell(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = if (isStoreOpen) {
-                                "Menutup toko cabang ${viewModel.getBranchDisplayName(session.branchId)} akan otomatis merekap seluruh pendapatan shift ini ke dalam catatan Income Money Manager:"
+                                "Menutup toko Cabang ${viewModel.getBranchDisplayName(session.branchId)} akan otomatis merekap seluruh pendapatan shift ini ke dalam catatan Income Money Manager:"
                             } else {
-                                "Ubah status operasional cabang ${viewModel.getBranchDisplayName(session.branchId)} menjadi BUKA?"
+                                "Ubah status operasional Cabang ${viewModel.getBranchDisplayName(session.branchId)} menjadi BUKA?"
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MutedCocoaText,
@@ -1847,7 +1847,7 @@ fun WaffleoLandscapeMainShell(
                                     color = RichEspressoPrimary
                                 )
                                 Text(
-                                    text = "Cabang: ${viewModel.getBranchDisplayName(session.branchId)} • Role: ${session.role.label}",
+                                    text = "Cabang ${viewModel.getBranchDisplayName(session.branchId)} • Role: ${session.role.label}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = DeepCaramelGold
                                 )
@@ -2287,7 +2287,7 @@ fun DeveloperBranchPortalScreen(
                                     color = SoftSageBg
                                 ) {
                                     Text(
-                                        text = profile.initializedFrom,
+                                        text = com.example.data.model.sanitizeBranchIdsInText(profile.initializedFrom),
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MatchaSageSuccess,
@@ -2348,7 +2348,7 @@ fun DeveloperBranchPortalScreen(
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 imageVector = Icons.Default.Delete,
-                                                contentDescription = "Hapus Cabang ${profile.branchId}",
+                                                contentDescription = "Hapus Cabang ${profile.displayName}",
                                                 tint = TerracottaDanger,
                                                 modifier = Modifier.size(18.dp)
                                             )
@@ -2697,9 +2697,9 @@ fun CreateNewBranchDialog(
                 if (isCopyMode) {
                     WaffleoSingleSelectDropdown(
                         label = "Pilih Sumber Cabang untuk Copy-Paste Data",
-                        selectedText = sourceBranch,
+                        selectedText = "Cabang ${com.example.data.model.formatCleanBranchName(sourceBranch, sourceBranch)}",
                         options = existingBranches.ifEmpty { listOf("Global") },
-                        optionLabel = { "Cabang $it" },
+                        optionLabel = { "Cabang ${com.example.data.model.formatCleanBranchName(it, it)}" },
                         onOptionSelected = { sourceBranch = it },
                         modifier = Modifier.fillMaxWidth(),
                         testTagPrefix = "new_branch_source"
@@ -2855,7 +2855,7 @@ private fun DeleteBranchConfirmationDialog(
                 }
 
                 Text(
-                    text = "Tindakan ini akan menghapus 'Cabang $branchId' beserta seluruh data katalog, akun staff, dan transaksi secara permanen.",
+                    text = "Tindakan ini akan menghapus 'Cabang ${com.example.data.model.formatCleanBranchName(branchId, branchId)}' beserta seluruh data katalog, akun staff, dan transaksi secara permanen.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MutedCocoaText
                 )

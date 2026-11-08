@@ -68,6 +68,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import android.app.DatePickerDialog
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -76,6 +78,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import java.util.Calendar
+import java.util.Locale
 import com.example.data.model.CatalogRecord
 import com.example.data.model.PromoBenefitType
 import com.example.data.model.PromoBundleGroupRule
@@ -429,8 +433,8 @@ fun PromoManagementCard(
     }
     val branchLabel = remember(config, promo.branchId) {
         if (config.applyToAllBranches) "Semua Cabang"
-        else if (config.targetBranches.isNotEmpty()) "Cabang: ${config.targetBranches.joinToString(", ")}"
-        else "Cabang: ${promo.branchId}"
+        else if (config.targetBranches.isNotEmpty()) config.targetBranches.joinToString(", ") { "Cabang ${com.example.data.model.formatCleanBranchName(it, it)}" }
+        else "Cabang ${com.example.data.model.formatCleanBranchName(promo.branchId, promo.branchId)}"
     }
 
     Card(
@@ -946,7 +950,9 @@ fun PromoDetailModalDialog(
                 )
                 PromoDetailRow(
                     "Cabang Berlaku",
-                    if (config.applyToAllBranches) "Semua Cabang" else config.targetBranches.joinToString(", ").ifBlank { promo.branchId }
+                    if (config.applyToAllBranches) "Semua Cabang"
+                    else if (config.targetBranches.isNotEmpty()) config.targetBranches.joinToString(", ") { "Cabang ${com.example.data.model.formatCleanBranchName(it, it)}" }
+                    else "Cabang ${com.example.data.model.formatCleanBranchName(promo.branchId, promo.branchId)}"
                 )
                 PromoDetailRow(
                     "Kuota & Pemakaian",
@@ -1070,10 +1076,36 @@ fun PromoFormModalDialog(
                     PromoQuantityTier(2, PromoBenefitType.DISCOUNT_NOMINAL, 2000L),
                     PromoQuantityTier(3, PromoBenefitType.DISCOUNT_NOMINAL, 4000L)
                 ),
-                applyToAllBranches = true,
+                applyToAllBranches = false,
                 targetBranches = listOf(activeBranchId)
             )
         }
+    }
+
+    val context = LocalContext.current
+
+    fun showDatePickerDialog(currentValue: String, onDateSelected: (String) -> Unit) {
+        val cal = Calendar.getInstance()
+        if (currentValue.isNotBlank()) {
+            try {
+                val parts = currentValue.split("-")
+                if (parts.size == 3) {
+                    cal.set(Calendar.YEAR, parts[0].toInt())
+                    cal.set(Calendar.MONTH, parts[1].toInt() - 1)
+                    cal.set(Calendar.DAY_OF_MONTH, parts[2].toInt())
+                }
+            } catch (_: Throwable) {}
+        }
+        DatePickerDialog(
+            context,
+            { _, year, monthOfYear, dayOfMonth ->
+                val formatted = String.format(Locale.US, "%04d-%02d-%02d", year, monthOfYear + 1, dayOfMonth)
+                onDateSelected(formatted)
+            },
+            cal.get(Calendar.YEAR),
+            cal.get(Calendar.MONTH),
+            cal.get(Calendar.DAY_OF_MONTH)
+        ).show()
     }
 
     var promoName by remember { mutableStateOf(existingPromo?.name ?: "") }
@@ -1688,22 +1720,121 @@ fun PromoFormModalDialog(
                     // --- SECTION E: JADWAL BERLAKU & HAPPY HOUR ---
                     PromoSectionCard(title = "E. Jadwal Berlaku & Happy Hour") {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            WaffleoSoftTextField(
-                                value = startDateKey,
-                                onValueChange = { startDateKey = it.trim() },
-                                label = "Tanggal Mulai (YYYY-MM-DD, kosong = langsung)",
-                                placeholder = "2026-11-01",
-                                modifier = Modifier.weight(1f),
-                                testTag = "promo_start_date_input"
-                            )
-                            WaffleoSoftTextField(
-                                value = endDateKey,
-                                onValueChange = { endDateKey = it.trim() },
-                                label = "Tanggal Berakhir (YYYY-MM-DD, kosong = selamanya)",
-                                placeholder = "2026-12-31",
-                                modifier = Modifier.weight(1f),
-                                testTag = "promo_end_date_input"
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = SoftOatSurface,
+                                border = BorderStroke(1.dp, SubtleSandBorder),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        showDatePickerDialog(startDateKey) { startDateKey = it }
+                                    }
+                                    .testTag("promo_start_date_picker")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Tanggal Mulai",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MutedCocoaText,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = startDateKey.ifBlank { "Langsung (Klik Sistem Kalender)" },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (startDateKey.isNotBlank()) RichEspressoPrimary else MutedCocoaText.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (startDateKey.isNotBlank()) {
+                                            IconButton(
+                                                onClick = { startDateKey = "" },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Hapus Tanggal Mulai",
+                                                    tint = TerracottaDanger,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.CalendarToday,
+                                            contentDescription = null,
+                                            tint = DeepCaramelGold,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = SoftOatSurface,
+                                border = BorderStroke(1.dp, SubtleSandBorder),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        showDatePickerDialog(endDateKey) { endDateKey = it }
+                                    }
+                                    .testTag("promo_end_date_picker")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Tanggal Berakhir",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MutedCocoaText,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = endDateKey.ifBlank { "Selamanya (Klik Sistem Kalender)" },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (endDateKey.isNotBlank()) RichEspressoPrimary else MutedCocoaText.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (endDateKey.isNotBlank()) {
+                                            IconButton(
+                                                onClick = { endDateKey = "" },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Hapus Tanggal Berakhir",
+                                                    tint = TerracottaDanger,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.CalendarToday,
+                                            contentDescription = null,
+                                            tint = DeepCaramelGold,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
@@ -1786,7 +1917,7 @@ fun PromoFormModalDialog(
                                 availableBranches.forEach { br ->
                                     val isBrSel = selectedBranches.any { it.equals(br, ignoreCase = true) }
                                     PromoOptionChip(
-                                        label = br,
+                                        label = "Cabang ${com.example.data.model.formatCleanBranchName(br, br)}",
                                         selected = isBrSel,
                                         onClick = {
                                             if (isBrSel && selectedBranches.size > 1) selectedBranches.removeAll { it.equals(br, ignoreCase = true) }

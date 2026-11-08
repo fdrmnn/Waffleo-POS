@@ -293,7 +293,7 @@ fun OrdersQueueScreen(
 
     orderToPay?.let { ord ->
         PaymentModalDialog(
-            title = "Pelunasan Pesanan ${ord.orderNumber}",
+            title = "Pelunasan Pesanan ${ord.displayOrderNumber}",
             totalBillAmount = ord.totalAmount,
             alreadyPaidAmount = ord.paidAmount,
             defaultMedia = ord.orderMedia,
@@ -312,7 +312,7 @@ fun OrdersQueueScreen(
             order = ord,
             onDismiss = { orderToPrint = null },
             onPrinted = {
-                viewModel.showBanner("Struk ${ord.orderNumber} berhasil dikirim ke printer thermal.")
+                viewModel.showBanner("Struk ${ord.displayOrderNumber} berhasil dikirim ke printer thermal.")
             }
         )
     }
@@ -1675,7 +1675,7 @@ fun OrderHistoryScreen(
                                         OrderDetailMetaItem(label = "No. Pesanan", value = ord.displayOrderNumber)
                                         OrderDetailMetaItem(label = "Media Pesanan", value = ord.orderMedia)
                                         OrderDetailMetaItem(label = "Customer Data", value = ord.customerData.ifBlank { "Pelanggan Di tempat" })
-                                        OrderDetailMetaItem(label = "Cabang", value = viewModel.getBranchDisplayName(ord.branchId))
+                                        OrderDetailMetaItem(label = "Cabang", value = "Cabang ${viewModel.getBranchDisplayName(ord.branchId)}")
                                     }
                                     Column(modifier = Modifier.weight(1.2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         OrderDetailMetaItem(label = "Diinput Oleh", value = ord.createdBy)
@@ -1965,7 +1965,7 @@ fun OrderHistoryScreen(
                                             eventType = "ORDER_CREATED",
                                             actorUsername = ord.createdBy,
                                             title = "Pesanan Dibuat",
-                                            description = "Pesanan ${ord.orderNumber} masuk via ${ord.orderMedia} (${ord.customerData}). Total: ${WaffleoViewModel.formatIdr(ord.totalAmount)}"
+                                            description = "Pesanan ${ord.displayOrderNumber} masuk via ${ord.orderMedia} (${ord.customerData}). Total: ${WaffleoViewModel.formatIdr(ord.totalAmount)}"
                                         ),
                                         if (ord.paidAmount > 0L) {
                                             OrderTimelineEvent(
@@ -2065,7 +2065,7 @@ fun OrderHistoryScreen(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "Hapus Permanen (Firestore)",
+                                            text = "Hapus Permanen",
                                             fontWeight = FontWeight.Bold,
                                             color = TerracottaDanger
                                         )
@@ -2104,7 +2104,7 @@ fun OrderHistoryScreen(
                     },
                     title = {
                         Text(
-                            text = "Hapus Pesanan ${ord.orderNumber}?",
+                            text = "Hapus Pesanan ${ord.displayOrderNumber}?",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = RichEspressoPrimary
@@ -2113,7 +2113,7 @@ fun OrderHistoryScreen(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                text = "Apakah Anda yakin ingin menghapus pesanan ${ord.orderNumber} senilai ${WaffleoViewModel.formatIdr(ord.totalAmount)}?",
+                                text = "Apakah Anda yakin ingin menghapus pesanan ${ord.displayOrderNumber} senilai ${WaffleoViewModel.formatIdr(ord.totalAmount)}?",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = RichEspressoPrimary
                             )
@@ -2192,7 +2192,7 @@ fun OrderHistoryScreen(
                     },
                     title = {
                         Text(
-                            text = "Hapus Permanen Pesanan ${ord.orderNumber}?",
+                            text = "Hapus Permanen Pesanan ${ord.displayOrderNumber}?",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = RichEspressoPrimary
@@ -2200,7 +2200,7 @@ fun OrderHistoryScreen(
                     },
                     text = {
                         Text(
-                            text = "Tindakan ini akan menghapus dokumen pesanan ${ord.orderNumber} secara permanen dari Cloud Firestore dan penyimpanan lokal. Pesanan ghaib/sampah ini tidak akan pernah muncul kembali.",
+                            text = "Tindakan ini akan menghapus dokumen pesanan ${ord.displayOrderNumber} secara permanen dari Cloud Firestore dan penyimpanan lokal. Pesanan ghaib/sampah ini tidak akan pernah muncul kembali.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = RichEspressoPrimary
                         )
@@ -2550,7 +2550,7 @@ private fun OrderTimelineEventCard(
                 if (event.description.isNotBlank()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = event.description,
+                        text = com.example.data.model.sanitizeBranchIdsInText(event.description),
                         style = MaterialTheme.typography.bodySmall,
                         color = RichEspressoPrimary
                     )

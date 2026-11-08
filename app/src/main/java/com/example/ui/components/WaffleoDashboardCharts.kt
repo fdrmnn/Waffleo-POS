@@ -3060,14 +3060,15 @@ fun TopMenuPerformanceBarCard(
     val maxQty = (filteredItems.maxOfOrNull { it.qtySold } ?: 1).coerceAtLeast(1)
     val totalCategoryRevenue = remember(filteredItems) { filteredItems.sumOf { it.grossRevenue } }
 
-    // Dynamic Tabs: Semua | Egg Waffle (..) | Minuman (..) | Snacks (..) | dst
-    val subTabs = remember(allMenuStats, activeMenuCategories) {
+    // Dynamic Tabs: Semua (total pcs sold) | Egg Waffle (pcs sold) | Minuman (pcs sold) | Snacks (pcs sold) | dst
+    val subTabs = remember(allMenuStats, activeMenuCategories, categorySoldQtyMap) {
+        val totalPcsSold = categorySoldQtyMap.values.sum()
         val tabs = mutableListOf<Pair<String, String>>()
-        tabs.add("ALL" to "Semua (${allMenuStats.size})")
+        tabs.add("ALL" to "Semua ($totalPcsSold)")
         activeMenuCategories.forEach { cat ->
-            val countInCat = allMenuStats.count { areCategoriesMatching(it.category, cat) }
+            val pcsSoldInCat = categorySoldQtyMap[cat] ?: 0
             val displayLabel = if (cat.equals("Drinks", ignoreCase = true)) "Minuman" else cat
-            tabs.add(cat to "$displayLabel ($countInCat)")
+            tabs.add(cat to "$displayLabel ($pcsSoldInCat)")
         }
         tabs
     }

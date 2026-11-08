@@ -315,11 +315,26 @@ class WaffleoViewModel(
         localStore?.loadDeletedBranchIds() ?: emptySet()
     )
 
+    // Permanently Deleted Order Tombstones (persisted locally & synced via Cloud workspace_settings)
+    private val _deletedOrderIds = MutableStateFlow<Set<String>>(
+        localStore?.loadDeletedOrderIds() ?: emptySet()
+    )
+
     private fun isBranchDeleted(raw: String, deletedSet: Set<String> = _deletedBranchIds.value): Boolean {
         if (raw.isBlank() || raw.equals("Global", ignoreCase = true)) return false
         val low = raw.trim().lowercase()
         val base = low.removePrefix("cabang ").trim()
         return low in deletedSet || base in deletedSet || "cabang $base" in deletedSet
+    }
+
+    private fun isOrderPermanentlyDeleted(
+        order: OrderRecord,
+        deletedOrderSet: Set<String> = _deletedOrderIds.value,
+        pendingSet: Set<String> = _pendingSyncKeys.value
+    ): Boolean {
+        return (order.id.isNotBlank() && order.id in deletedOrderSet) ||
+            (order.orderNumber.isNotBlank() && order.orderNumber in deletedOrderSet) ||
+            "order_delete:${order.id}" in pendingSet
     }
 
     // Cloud Data Streams with Local Persistent Storage & Seed Fallback
@@ -331,7 +346,7 @@ class WaffleoViewModel(
     private val _localOrders = MutableStateFlow<List<OrderRecord>>(
         (localStore?.loadOrders()?.takeIf { it.isNotEmpty() }
             ?: WaffleoSeedData.defaultOrderRecords(workspaceId, "Global"))
-            .filterNot { isBranchDeleted(it.branchId) }
+            .filterNot { isBranchDeleted(it.branchId) || isOrderPermanentlyDeleted(it) }
     )
     private val _localAuditLogs = MutableStateFlow<List<AuditLogRecord>>(
         localStore?.loadAuditLogs() ?: emptyList()
@@ -433,22 +448,23 @@ class WaffleoViewModel(
                     emit(emptyList())
                 },
                 _localOrders,
-                _deletedBranchIds
-            ) { cloudList, localList, deletedSet ->
-                val pending = _pendingSyncKeys.value
+                _deletedBranchIds,
+                _deletedOrderIds,
+                _pendingSyncKeys
+            ) { cloudList, localList, deletedSet, deletedOrdersSet, pending ->
                 val validCloud = cloudList.filter {
                     it.id.startsWith("v1_") &&
                         it.orderNumber != "WFL-001" &&
                         it.id != "WFL-001" &&
                         !isBranchDeleted(it.branchId, deletedSet) &&
-                        "order_delete:${it.id}" !in pending &&
+                        !isOrderPermanentlyDeleted(it, deletedOrdersSet, pending) &&
                         (!it.createdBy.contains("developer", ignoreCase = true) || isDeveloperSession())
                 }
                 val validLocal = localList.filter {
                     it.orderNumber != "WFL-001" &&
                         it.id != "WFL-001" &&
                         !isBranchDeleted(it.branchId, deletedSet) &&
-                        "order_delete:${it.id}" !in pending &&
+                        !isOrderPermanentlyDeleted(it, deletedOrdersSet, pending) &&
                         (!it.createdBy.contains("developer", ignoreCase = true) || isDeveloperSession())
                 }
                 val mergedMap = LinkedHashMap<String, OrderRecord>()
@@ -464,13 +480,15 @@ class WaffleoViewModel(
                     }
                 }
                 mergedMap.values
-                    .filterNot { "order_delete:${it.id}" in pending }
+                    .filterNot { isOrderPermanentlyDeleted(it, deletedOrdersSet, pending) }
                     .sortedBy { it.sequenceIndex }
             }
         } else {
-            _localOrders
+            combine(_localOrders, _deletedOrderIds, _pendingSyncKeys) { localList, deletedOrdersSet, pending ->
+                localList.filterNot { isOrderPermanentlyDeleted(it, deletedOrdersSet, pending) }
+            }
         }
-    ).stateIn(viewModelScope, SharingStarted.Eagerly, _localOrders.value.filter { it.orderNumber != "WFL-001" && it.id != "WFL-001" })
+    ).stateIn(viewModelScope, SharingStarted.Eagerly, _localOrders.value.filter { it.orderNumber != "WFL-001" && it.id != "WFL-001" && !isOrderPermanentlyDeleted(it) })
 
     val orders: StateFlow<List<OrderRecord>> = combine(allOrders, _session) { list, sess ->
         list.filter { isSameBranch(it.branchId, sess.branchId) }
@@ -509,22 +527,7 @@ class WaffleoViewModel(
         val profile = _branchProfiles.value.firstOrNull {
             it.branchId.equals(branchId, ignoreCase = true) || it.name.equals(branchId, ignoreCase = true)
         }
-        if (profile != null) {
-            val dName = profile.displayName
-            if (dName.isNotBlank() && !dName.equals(branchId, ignoreCase = true)) return dName
-        }
-        val staffAcc = _staffAccounts.value.firstOrNull { it.branchId.equals(branchId, ignoreCase = true) && !it.username.equals("developer", ignoreCase = true) }
-        if (staffAcc != null) {
-            val u = staffAcc.username
-            if (u.isNotBlank() && !u.equals("owner", ignoreCase = true)) {
-                return u.replaceFirstChar { it.uppercaseChar() }
-            }
-        }
-        if (branchId.contains("gabek", ignoreCase = true)) {
-            return "Gabek"
-        }
-        val clean = branchId.removePrefix("branch_").replace("_", " ").trim()
-        return if (clean.isNotBlank()) clean.replaceFirstChar { it.uppercaseChar() } else branchId
+        return com.example.data.model.formatCleanBranchName(profile?.name.orEmpty(), branchId)
     }
 
     // --- MONEY MANAGER & SETTINGS: BANK & DIGITAL WALLET STATES ---
@@ -958,6 +961,7 @@ class WaffleoViewModel(
             _localOrders.value.filter {
                 it.id.startsWith("v1_") &&
                     !isBranchDeleted(it.branchId, deletedSet) &&
+                    !isOrderPermanentlyDeleted(it) &&
                     !it.createdBy.contains("developer", ignoreCase = true)
             }.forEach { ord ->
                 repository.updateOrder(workspaceId, ord.copy(userId = workspaceId))
@@ -1048,8 +1052,19 @@ class WaffleoViewModel(
                         ?: WaffleoSeedData.defaultBranchProfiles.first()
                     repository.saveBranchProfile(workspaceId, globalProf)
                 }
+                val healedProfiles = cloudProfiles.map { cp ->
+                    val cleanName = com.example.data.model.formatCleanBranchName(cp.name, cp.branchId)
+                    val cleanInit = com.example.data.model.sanitizeBranchIdsInText(cp.initializedFrom)
+                    val healed = cp.copy(name = cleanName, initializedFrom = cleanInit)
+                    if (isNetworkOnline.value && (cp.name != cleanName || cp.initializedFrom != cleanInit)) {
+                        viewModelScope.launch {
+                            repository.saveBranchProfile(workspaceId, healed)
+                        }
+                    }
+                    healed
+                }
                 reconcileDiscoveredBranches(
-                    cloudProfiles = cloudProfiles,
+                    cloudProfiles = healedProfiles,
                     isAuthoritativeCloudSnapshot = true
                 )
             }
@@ -1190,11 +1205,27 @@ class WaffleoViewModel(
         viewModelScope.launch {
             repository.observeOrders(workspaceId).catch { emit(emptyList()) }.collect { cloudOrders ->
                 val deletedSet = _deletedBranchIds.value
+                val deletedOrdersSet = _deletedOrderIds.value
                 val pending = _pendingSyncKeys.value
+
+                // Proactively delete any lingering cloud orders that were already permanently tombstoned locally
+                if (isNetworkOnline.value) {
+                    cloudOrders.filter { isOrderPermanentlyDeleted(it, deletedOrdersSet, pending) }.forEach { ghostOrd ->
+                        if (ghostOrd.id.isNotBlank()) {
+                            viewModelScope.launch {
+                                val deletedOk = repository.deleteOrder(workspaceId, ghostOrd.id)
+                                if (deletedOk) {
+                                    clearPendingSyncKey("order_delete:${ghostOrd.id}")
+                                }
+                            }
+                        }
+                    }
+                }
+
                 val validCloudOrders = cloudOrders.filter {
                     it.id.startsWith("v1_") &&
                         !isBranchDeleted(it.branchId, deletedSet) &&
-                        "order_delete:${it.id}" !in pending
+                        !isOrderPermanentlyDeleted(it, deletedOrdersSet, pending)
                 }
                 if (validCloudOrders.isNotEmpty()) {
                     validCloudOrders.groupBy { it.branchId }.forEach { (bId, branchCloudOrders) ->
@@ -1209,7 +1240,7 @@ class WaffleoViewModel(
                             logAuditEvent(
                                 actionType = "SECURITY_ALERT_STORAGE_RESET",
                                 entityId = bId,
-                                summary = "Deteksi Pemulihan / Reset Penyimpanan Lokal pada Cabang $bId: Urutan pesanan diselaraskan otomatis ke Cloud (#$cloudMaxSeq) untuk mencegah bentrok nomor pesanan.",
+                                summary = "Deteksi Pemulihan / Reset Penyimpanan Lokal pada Cabang ${getBranchDisplayName(bId)}: Urutan pesanan diselaraskan otomatis ke Cloud (#$cloudMaxSeq) untuk mencegah bentrok nomor pesanan.",
                                 beforeSnapshot = """{"localMaxSeq":$currentLocalListMax,"recordedHighSeq":$localMaxSeq}""",
                                 afterSnapshot = """{"cloudMaxSeq":$cloudMaxSeq,"status":"RECOVERED"}"""
                             )
@@ -1220,13 +1251,13 @@ class WaffleoViewModel(
                 }
                 val mergedMap = LinkedHashMap<String, OrderRecord>()
                 validCloudOrders.forEach { cOrd ->
-                    if ("order:${cOrd.id}" !in pending) {
+                    if ("order:${cOrd.id}" !in pending && !isOrderPermanentlyDeleted(cOrd, deletedOrdersSet, pending)) {
                         mergedMap[cOrd.id] = cOrd
                     }
                 }
                 _localOrders.value.forEach { localOrd ->
                     if (!isBranchDeleted(localOrd.branchId, deletedSet) &&
-                        "order_delete:${localOrd.id}" !in pending &&
+                        !isOrderPermanentlyDeleted(localOrd, deletedOrdersSet, pending) &&
                         ("order:${localOrd.id}" in pending || (isDeveloperSession() && localOrd.createdBy.contains("developer", ignoreCase = true)) || validCloudOrders.isEmpty())
                     ) {
                         mergedMap[localOrd.id] = localOrd
@@ -1317,8 +1348,17 @@ class WaffleoViewModel(
                 val entityId = parts[1]
                 val ok = when (type) {
                     "order" -> {
-                        val ord = _localOrders.value.firstOrNull { it.id == entityId }
-                        if (ord != null && !isBranchDeleted(ord.branchId)) repository.updateOrder(workspaceId, ord.copy(userId = workspaceId)) else true
+                        if (entityId in _deletedOrderIds.value || "order_delete:$entityId" in _pendingSyncKeys.value) {
+                            true
+                        } else {
+                            val ord = _localOrders.value.firstOrNull { it.id == entityId }
+                            if (ord != null && !isBranchDeleted(ord.branchId) && !isOrderPermanentlyDeleted(ord)) {
+                                repository.updateOrder(workspaceId, ord.copy(userId = workspaceId))
+                            } else true
+                        }
+                    }
+                    "order_delete" -> {
+                        repository.deleteOrder(workspaceId, entityId)
                     }
                     "catalog" -> {
                         val cat = _localSeededCatalog.value.firstOrNull { it.id == entityId }
@@ -1413,7 +1453,7 @@ class WaffleoViewModel(
 
     fun showBanner(message: String) {
         bannerDismissJob?.cancel()
-        _statusBannerMessage.value = message
+        _statusBannerMessage.value = com.example.data.model.sanitizeBranchIdsInText(message)
         bannerDismissJob = viewModelScope.launch {
             delay(2000L)
             _statusBannerMessage.value = null
@@ -1434,19 +1474,21 @@ class WaffleoViewModel(
 
     fun getBranchGoogleAccountLabel(branchId: String): String {
         _authorizedBranchesVersion.value
-        return localStore?.getBranchGoogleAccountLabel(branchId)
-            ?: "Akun Google Cabang $branchId"
+        val displayBranch = getBranchDisplayName(branchId)
+        return localStore?.getBranchGoogleAccountLabel(branchId)?.let { com.example.data.model.sanitizeBranchIdsInText(it) }
+            ?: "Akun Google Cabang $displayBranch"
     }
 
     fun markBranchGoogleAuthorized(branchId: String, googleAccountLabel: String) {
+        val displayBranch = getBranchDisplayName(branchId)
         localStore?.markBranchGoogleAuthorized(branchId, googleAccountLabel)
         _authorizedBranchesVersion.value += 1
         logAuditEvent(
             actionType = "BRANCH_GOOGLE_AUTHORIZED",
             entityId = branchId,
-            summary = "Verifikasi 1x Akun Google Cabang $branchId berhasil diotorisasi pada perangkat ini ($googleAccountLabel)",
+            summary = "Verifikasi 1x Akun Google Cabang $displayBranch berhasil diotorisasi pada perangkat ini ($googleAccountLabel)",
             beforeSnapshot = """{"authorized":false}""",
-            afterSnapshot = """{"authorized":true,"branch":"$branchId","googleAccount":"$googleAccountLabel"}"""
+            afterSnapshot = """{"authorized":true,"branch":"$displayBranch","googleAccount":"$googleAccountLabel"}"""
         )
     }
 
@@ -1523,14 +1565,15 @@ class WaffleoViewModel(
                 _currentDestination.value = MainNavDestination.MENUS
             }
             localStore?.saveLastLoginBranch(account.branchId)
+            val displayBranch = getBranchDisplayName(account.branchId)
             logAuditEvent(
                 actionType = "STAFF_LOGIN",
                 entityId = account.username,
-                summary = "Login berhasil di cabang ${account.branchId} sebagai ${account.role.label}",
+                summary = "Login berhasil di Cabang $displayBranch sebagai ${account.role.label}",
                 beforeSnapshot = "{}",
-                afterSnapshot = """{"branch":"${account.branchId}","user":"${account.username}","role":"${account.role.label}"}"""
+                afterSnapshot = """{"branch":"$displayBranch","user":"${account.username}","role":"${account.role.label}"}"""
             )
-            showBanner("Selamat datang, ${account.displayName} (${getBranchDisplayName(account.branchId)})")
+            showBanner("Selamat datang, ${account.displayName} (Cabang $displayBranch)")
             true
         } else {
             false
@@ -1554,7 +1597,7 @@ class WaffleoViewModel(
         val displayTarget = getBranchDisplayName(targetBranch)
         logAuditEvent(
             actionType = "DEV_ENTER_BRANCH",
-            entityId = targetBranch,
+            entityId = displayTarget,
             summary = "Developer masuk ke ruang operasional Cabang $displayTarget (Full Access)",
             beforeSnapshot = """{"branch":"${current.branchId}","portal":true}""",
             afterSnapshot = """{"branch":"$targetBranch","portal":false}"""
@@ -1577,7 +1620,7 @@ class WaffleoViewModel(
 
         val profile = _branchProfiles.value.firstOrNull { it.branchId.equals(cleanBranch, ignoreCase = true) || it.name.equals(cleanBranch, ignoreCase = true) }
         val resolvedBranchId = profile?.branchId ?: cleanBranch
-        val resolvedName = profile?.name?.ifBlank { null } ?: profile?.displayName ?: cleanBranch
+        val resolvedName = getBranchDisplayName(resolvedBranchId)
 
         val baseSlug = resolvedName.lowercase().removePrefix("cabang ").trim()
         val branchVariants = setOf(
@@ -1666,12 +1709,12 @@ class WaffleoViewModel(
         logAuditEvent(
             actionType = "BRANCH_DELETED",
             entityId = resolvedName,
-            summary = "Cabang '$resolvedName' ($resolvedBranchId) dihapus secara permanen dari sistem & Cloud oleh Developer ($devUsername)",
+            summary = "Cabang $resolvedName dihapus secara permanen dari sistem & Cloud oleh Developer ($devUsername)",
             beforeSnapshot = """{"branch":"$resolvedName","id":"$resolvedBranchId"}""",
             afterSnapshot = "{}"
         )
 
-        showBanner("Cabang '$resolvedName' berhasil dihapus secara permanen dari seluruh perangkat.")
+        showBanner("Cabang $resolvedName berhasil dihapus secara permanen dari seluruh perangkat.")
         return Result.success(Unit)
     }
 
@@ -1743,7 +1786,7 @@ class WaffleoViewModel(
         }
 
         val nowText = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.forLanguageTag("id-ID")).format(Date())
-        val initModeLabel = if (!copyFromBranch.isNullOrBlank()) "Salin Data dari $copyFromBranch" else "Kosong (Input Manual Owner)"
+        val initModeLabel = if (!copyFromBranch.isNullOrBlank()) "Salin Data dari Cabang ${getBranchDisplayName(copyFromBranch)}" else "Kosong (Input Manual Owner)"
 
         // Generate a 100% unique UUID Branch ID for this new branch entity
         val newBranchId = "branch_" + java.util.UUID.randomUUID().toString()
@@ -1850,11 +1893,11 @@ class WaffleoViewModel(
             logAuditEvent(
                 actionType = "BRANCH_CREATED",
                 entityId = newBranchId,
-                summary = "Cabang baru '$cleanBranch' (ID: $newBranchId) dibuat oleh Developer (Owner: $cleanOwnerUser • Mode Data: $initModeLabel)",
+                summary = "Cabang baru 'Cabang $cleanBranch' dibuat oleh Developer (Owner: $cleanOwnerUser • Mode Data: $initModeLabel)",
                 beforeSnapshot = "{}",
                 afterSnapshot = """{"branch":"$cleanBranch","branchId":"$newBranchId","location":"${profile.location}","owner":"$cleanOwnerUser","initMode":"$initModeLabel","itemsCopied":${newRecords.size}}"""
             )
-            showBanner("Cabang '$cleanBranch' berhasil dibuat & disinkronkan ke Cloud ($initModeLabel).")
+            showBanner("Cabang $cleanBranch berhasil dibuat & disinkronkan ke Cloud ($initModeLabel).")
         }
 
         return Result.success(newBranchId)
@@ -1873,10 +1916,11 @@ class WaffleoViewModel(
         }
 
         performLocalCacheSanitization()
+        val displayBranch = getBranchDisplayName(prev.branchId)
         logAuditEvent(
             actionType = "STAFF_LOGOUT",
             entityId = prev.username,
-            summary = "Logout dari cabang ${prev.branchId}",
+            summary = "Logout dari Cabang $displayBranch",
             beforeSnapshot = """{"user":"${prev.username}","loginTime":"${prev.loginTimeFormatted}"}""",
             afterSnapshot = """{"isLoggedIn":false}"""
         )
@@ -1933,13 +1977,13 @@ class WaffleoViewModel(
 
         // 2. Clean stale or ghost orders from local state
         val isDev = isDeveloperSession()
+        val deletedOrdersSet = _deletedOrderIds.value
         val currentOrders = _localOrders.value
         val sanitizedOrders = currentOrders.filter { ord ->
             val isBranchValid = !isBranchDeleted(ord.branchId, deletedSet)
-            val isNotErased = ord.status != "ERASED"
-            val isNotGhostDelete = "order_delete:${ord.id}" !in pendingKeys
+            val isNotPermanentlyDeleted = !isOrderPermanentlyDeleted(ord, deletedOrdersSet, pendingKeys)
             val isNotOrphanDevTest = isDev || (!ord.createdBy.contains("developer", ignoreCase = true) && ord.orderNumber != "WFL-001" && ord.id != "WFL-001")
-            isBranchValid && isNotErased && isNotGhostDelete && isNotOrphanDevTest
+            isBranchValid && isNotPermanentlyDeleted && isNotOrphanDevTest
         }
 
         if (sanitizedOrders.size != currentOrders.size) {
@@ -1987,26 +2031,26 @@ class WaffleoViewModel(
             val displayBranch = getBranchDisplayName(_session.value.branchId)
             logAuditEvent(
                 actionType = "STORE_CLOSED_AUTO_SYNC",
-                entityId = _session.value.branchId,
-                summary = "Toko cabang $displayBranch DITUTUP • Rekapitulasi Shift (${shiftUnrecappedOrders.size} pesanan, ${formatIdr(totalNetIncome)}) otomatis disinkronkan ke Money Manager",
+                entityId = displayBranch,
+                summary = "Toko Cabang $displayBranch DITUTUP • Rekapitulasi Shift (${shiftUnrecappedOrders.size} pesanan, ${formatIdr(totalNetIncome)}) otomatis disinkronkan ke Money Manager",
                 beforeSnapshot = """{"isStoreOpen":$before}""",
                 afterSnapshot = """{"isStoreOpen":$after,"shiftOrders":${shiftUnrecappedOrders.size},"autoSyncedChannels":$channelCount,"totalNetIncome":$totalNetIncome}"""
             )
             if (channelCount > 0) {
-                showBanner("Toko $displayBranch Ditutup • Rekap Shift ${formatIdr(totalNetIncome)} (${shiftUnrecappedOrders.size} pesanan) tersinkronisasi ke Money Manager")
+                showBanner("Toko Cabang $displayBranch Ditutup • Rekap Shift ${formatIdr(totalNetIncome)} (${shiftUnrecappedOrders.size} pesanan) tersinkronisasi ke Money Manager")
             } else {
-                showBanner("Status Toko $displayBranch: $statusLabel")
+                showBanner("Status Toko Cabang $displayBranch: $statusLabel")
             }
         } else {
             val displayBranch = getBranchDisplayName(_session.value.branchId)
             logAuditEvent(
                 actionType = "STORE_STATUS",
-                entityId = _session.value.branchId,
-                summary = "Status toko cabang $displayBranch diubah menjadi $statusLabel",
+                entityId = displayBranch,
+                summary = "Status toko Cabang $displayBranch diubah menjadi $statusLabel",
                 beforeSnapshot = """{"isStoreOpen":$before}""",
                 afterSnapshot = """{"isStoreOpen":$after}"""
             )
-            showBanner("Status Toko $displayBranch: $statusLabel")
+            showBanner("Status Toko Cabang $displayBranch: $statusLabel")
         }
     }
 
@@ -2457,10 +2501,11 @@ class WaffleoViewModel(
                     it.name.equals(media.label, ignoreCase = true) ||
                     it.category.equals(media.label, ignoreCase = true))
         }
+        val displayBranch = getBranchDisplayName(_session.value.branchId)
         if (rec == null) {
             val defaultComm = if (media == OrderMedia.SHOPEEFOOD) 25.0 else 20.0
             val defaultFee = if (media == OrderMedia.GOFOOD) 1000L else 0L
-            return Triple(defaultComm, defaultFee, "Rekening Bank BCA (Cabang ${_session.value.branchId})")
+            return Triple(defaultComm, defaultFee, "Rekening Bank BCA (Cabang $displayBranch)")
         }
         val meta = try { JSONObject(rec.metadataJson) } catch (e: Exception) { JSONObject() }
         val commPct = meta.optDouble("commissionPercent", rec.priceWalkIn.toDouble())
@@ -2471,7 +2516,8 @@ class WaffleoViewModel(
             OrderMedia.SHOPEEFOOD -> if (rec.priceShopeeFood > 0L) rec.priceShopeeFood else fallbackMetaFee
             OrderMedia.WALK_IN, OrderMedia.WHATSAPP, OrderMedia.INSTAGRAM -> 0L
         }
-        val bankLabel = meta.optString("bankAccount", "Rekening Bank BCA (Cabang ${_session.value.branchId})")
+        val rawBankLabel = meta.optString("bankAccount", "Rekening Bank BCA (Cabang $displayBranch)")
+        val bankLabel = com.example.data.model.sanitizeBranchIdsInText(rawBankLabel)
         return Triple(commPct, orderFee, bankLabel)
     }
 
@@ -2777,7 +2823,8 @@ class WaffleoViewModel(
 
                 val activeBranch = _session.value.branchId
                 val normActiveBranch = normalizeBranchKey(activeBranch)
-                val branchSlug = normActiveBranch.uppercase().replace(Regex("[^A-Z0-9]"), "").ifEmpty { "GLOBAL" }
+                val cleanBranchName = getBranchDisplayName(activeBranch)
+                val branchSlug = cleanBranchName.uppercase().replace(Regex("[^A-Z0-9]"), "").ifEmpty { "GLOBAL" }
                 val dateFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
                 val dateKeyFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 val dateStr = dateFmt.format(Date(nowMs))
@@ -3321,7 +3368,7 @@ class WaffleoViewModel(
             _cartBackdatedTimeText.value = "00:00"
         }
         _currentDestination.value = MainNavDestination.MENUS
-        showBanner("Mode Edit Aktif: Memanggil pesanan ${order.orderNumber} ke Cart")
+        showBanner("Mode Edit Aktif: Memanggil pesanan ${order.displayOrderNumber} ke Cart")
     }
 
     fun cancelEditingMode() {
@@ -3498,13 +3545,13 @@ class WaffleoViewModel(
             }.toString()
             logAuditEvent(
                 actionType = "ORDER_PAID",
-                entityId = order.orderNumber,
-                summary = "Pembayaran pesanan ${order.orderNumber} lunas (${formatIdr(order.totalAmount)}) via $resolvedPaymentMethod",
+                entityId = order.displayOrderNumber,
+                summary = "Pembayaran pesanan ${order.displayOrderNumber} lunas (${formatIdr(order.totalAmount)}) via $resolvedPaymentMethod",
                 beforeSnapshot = """{"isPaid":${order.isPaid},"paidAmount":${order.paidAmount},"shortfall":${order.shortfallAmount}}""",
                 afterSnapshot = paidSnapshot,
                 customTimestampMillis = nowMs
             )
-            showBanner("Pesanan ${order.orderNumber} dinyatakan LUNAS (Paid).")
+            showBanner("Pesanan ${order.displayOrderNumber} dinyatakan LUNAS (Paid).")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3537,7 +3584,7 @@ class WaffleoViewModel(
                         actorUsername = order.createdBy,
                         actorRole = "Staff",
                         title = "Pesanan Dibuat",
-                        description = "Pesanan ${order.orderNumber} masuk via ${order.orderMedia} (${order.customerData})."
+                        description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData})."
                     )
                 )
             }
@@ -3551,7 +3598,7 @@ class WaffleoViewModel(
                     actorUsername = _session.value.username,
                     actorRole = _session.value.role.label,
                     title = "Pesanan Selesai Dimasak (Prepared)",
-                    description = "Seluruh item pesanan ${order.orderNumber} selesai disiapkan di dapur oleh ${_session.value.username}."
+                    description = "Seluruh item pesanan ${order.displayOrderNumber} selesai disiapkan di dapur oleh ${_session.value.username}."
                 )
             )
             val updated = order.copy(
@@ -3564,13 +3611,13 @@ class WaffleoViewModel(
             syncOrderToCloud(updated, isNew = false)
             logAuditEvent(
                 actionType = "ORDER_PREPARED",
-                entityId = order.orderNumber,
-                summary = "Seluruh item pada pesanan ${order.orderNumber} selesai dibuat (Prepared)",
+                entityId = order.displayOrderNumber,
+                summary = "Seluruh item pada pesanan ${order.displayOrderNumber} selesai dibuat (Prepared)",
                 beforeSnapshot = """{"isPrepared":false}""",
                 afterSnapshot = """{"isPrepared":true}""",
                 customTimestampMillis = nowMs
             )
-            showBanner("Pesanan ${order.orderNumber} telah selesai dibuat (Prepared).")
+            showBanner("Pesanan ${order.displayOrderNumber} telah selesai dibuat (Prepared).")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3609,7 +3656,7 @@ class WaffleoViewModel(
                         actorUsername = order.createdBy,
                         actorRole = "Staff",
                         title = "Pesanan Dibuat",
-                        description = "Pesanan ${order.orderNumber} masuk via ${order.orderMedia} (${order.customerData})."
+                        description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData})."
                     )
                 )
             }
@@ -3623,7 +3670,7 @@ class WaffleoViewModel(
                     actorUsername = _session.value.username,
                     actorRole = _session.value.role.label,
                     title = "Pesanan Selesai",
-                    description = "Pesanan ${order.orderNumber} diserahkan ke customer oleh ${_session.value.username} dan dipindahkan ke Order History."
+                    description = "Pesanan ${order.displayOrderNumber} diserahkan ke customer oleh ${_session.value.username} dan dipindahkan ke Order History."
                 )
             )
             val updatedOrder = order.copy(
@@ -3661,8 +3708,8 @@ class WaffleoViewModel(
 
             logAuditEvent(
                 actionType = "ORDER_DONE_STOCK_DEDUCTED",
-                entityId = order.orderNumber,
-                summary = "Pesanan ${order.orderNumber} SELESAI (Done!) & diserahkan ke customer.",
+                entityId = order.displayOrderNumber,
+                summary = "Pesanan ${order.displayOrderNumber} SELESAI (Done!) & diserahkan ke customer.",
                 beforeSnapshot = """{"status":"ACTIVE"}""",
                 afterSnapshot = """{"status":"DONE"}""",
                 customTimestampMillis = nowMs
@@ -3683,7 +3730,7 @@ class WaffleoViewModel(
                 )
             }
 
-            showBanner("Pesanan ${order.orderNumber} Selesai (Done!) & dipindahkan ke Order History.")
+            showBanner("Pesanan ${order.displayOrderNumber} Selesai (Done!) & dipindahkan ke Order History.")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3762,8 +3809,8 @@ class WaffleoViewModel(
             }
             logAuditEvent(
                 actionType = "ORDER_CANCELLED",
-                entityId = order.orderNumber,
-                summary = "Pesanan ${order.orderNumber} DIBATALKAN oleh $actorInfo pada $nowText. Alasan: $reason (Stok bahan tidak dikurangi)",
+                entityId = order.displayOrderNumber,
+                summary = "Pesanan ${order.displayOrderNumber} DIBATALKAN oleh $actorInfo pada $nowText. Alasan: $reason (Stok bahan tidak dikurangi)",
                 beforeSnapshot = """{"status":"ACTIVE","total":${order.totalAmount}}""",
                 afterSnapshot = """{"status":"CANCELLED","reason":${JSONObject.quote(reason)},"cancelledBy":${JSONObject.quote(actorInfo)},"cancelledAt":"$nowText"}""",
                 customTimestampMillis = nowMs
@@ -3776,7 +3823,7 @@ class WaffleoViewModel(
             if (isBackdatedOrder(updated) || hasExistingDateSync) {
                 syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
             }
-            showBanner("Pesanan ${order.orderNumber} dibatalkan dan dipindahkan ke Riwayat Dibatalkan.")
+            showBanner("Pesanan ${order.displayOrderNumber} dibatalkan dan dipindahkan ke Riwayat Dibatalkan.")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3818,7 +3865,7 @@ class WaffleoViewModel(
                     actorUsername = _session.value.username,
                     actorRole = _session.value.role.label,
                     title = "Pesanan Dihapus (Erased)",
-                    description = "Pesanan ${order.orderNumber} dihapus oleh $actorInfo dari daftar penjualan aktif dan dipindahkan ke arsip 'Erased - Dihapus'. Catatan: $reason."
+                    description = "Pesanan ${order.displayOrderNumber} dihapus oleh $actorInfo dari daftar penjualan aktif dan dipindahkan ke arsip 'Erased - Dihapus'. Catatan: $reason."
                 )
             )
 
@@ -3866,8 +3913,8 @@ class WaffleoViewModel(
             val restoredStockText = if (restoredIngredients.isNotEmpty()) " • Stok dipulihkan: ${restoredIngredients.joinToString(", ")}" else ""
             logAuditEvent(
                 actionType = "ORDER_ERASED",
-                entityId = order.orderNumber,
-                summary = "Pesanan ${order.orderNumber} senilai ${formatIdr(order.totalAmount)} DIHAPUS oleh $actorInfo. Data keuangan & penjualan disinkronkan kembali$restoredStockText.",
+                entityId = order.displayOrderNumber,
+                summary = "Pesanan ${order.displayOrderNumber} senilai ${formatIdr(order.totalAmount)} DIHAPUS oleh $actorInfo. Data keuangan & penjualan disinkronkan kembali$restoredStockText.",
                 beforeSnapshot = """{"status":"${order.status}","totalAmount":${order.totalAmount},"paidAmount":${order.paidAmount},"isPaid":${order.isPaid},"itemsSummary":${JSONObject.quote(order.itemsSummary)}}""",
                 afterSnapshot = """{"status":"ERASED","erasedBy":${JSONObject.quote(actorInfo)},"erasedAt":"$nowText","reason":${JSONObject.quote(reason)},"restoredIngredients":${JSONObject.quote(restoredIngredients.joinToString("; "))}}""",
                 customTimestampMillis = nowMs
@@ -3878,7 +3925,7 @@ class WaffleoViewModel(
             val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
             syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
 
-            showBanner("Pesanan ${order.orderNumber} berhasil dihapus dari daftar penjualan aktif dan dipindahkan ke 'Erased - Dihapus'.")
+            showBanner("Pesanan ${order.displayOrderNumber} berhasil dihapus dari daftar penjualan aktif dan dipindahkan ke 'Erased - Dihapus'.")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3890,56 +3937,89 @@ class WaffleoViewModel(
             showBanner("Hanya Owner atau Developer yang dapat menghapus pesanan secara permanen.")
             return
         }
-        val actionKey = "delete:${order.id}"
+        val actionKey = "delete:${order.id.ifBlank { order.orderNumber }}"
         if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
             try {
-            if (order.status == "DONE") {
-                val lineItems = CartLineItem.deserializeList(order.itemsPayload)
-                val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
-                val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
-                val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
-                currentIngredients.forEach { ing ->
-                    val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
-                    val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
-                    val perDrink = meta.optDouble("usagePerDrink", 0.0)
-                    val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
-                    if (usedQty > 0.0) {
-                        val updatedIng = ing.copy(stockQty = ing.stockQty + usedQty)
-                        updateLocalSeedCatalogItem(updatedIng)
-                        syncCatalogItemToCloud(updatedIng)
+                if (order.status == "DONE") {
+                    val lineItems = CartLineItem.deserializeList(order.itemsPayload)
+                    val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
+                    val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
+                    val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
+                    currentIngredients.forEach { ing ->
+                        val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
+                        val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
+                        val perDrink = meta.optDouble("usagePerDrink", 0.0)
+                        val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
+                        if (usedQty > 0.0) {
+                            val updatedIng = ing.copy(stockQty = ing.stockQty + usedQty)
+                            updateLocalSeedCatalogItem(updatedIng)
+                            syncCatalogItemToCloud(updatedIng)
+                        }
                     }
                 }
-            }
-            if (order.status != "CANCELLED" && order.status != "ERASED" && order.discountAmount > 0L && order.promoCode.isNotBlank()) {
-                restorePromoQuotaForOrder(order)
-            }
+                if (order.status != "CANCELLED" && order.status != "ERASED" && order.discountAmount > 0L && order.promoCode.isNotBlank()) {
+                    restorePromoQuotaForOrder(order)
+                }
 
-            val updatedLocal = _localOrders.value.filterNot { it.id == order.id }
-            _localOrders.value = updatedLocal
-            localStore?.saveOrders(updatedLocal)
+                // 1. Record permanent deletion tombstones FIRST so reactive streams never re-emit the order
+                val tombstones = buildSet {
+                    if (order.id.isNotBlank()) add(order.id.trim())
+                    if (order.orderNumber.isNotBlank()) add(order.orderNumber.trim())
+                }
+                val updatedDeletedIds = _deletedOrderIds.value + tombstones
+                _deletedOrderIds.value = updatedDeletedIds
+                localStore?.saveDeletedOrderIds(updatedDeletedIds)
 
-            clearPendingSyncKey("order:${order.id}")
-            val delKey = "order_delete:${order.id}"
-            markPendingSyncKey(delKey)
+                // 2. Cancel any pending offline upsert for this order and enqueue permanent cloud deletion
+                if (order.id.isNotBlank()) {
+                    clearPendingSyncKey("order:${order.id}")
+                }
+                val delKey = "order_delete:${order.id}"
+                if (order.id.isNotBlank()) {
+                    markPendingSyncKey(delKey)
+                }
 
-            if (isCloudAuthenticated && isNetworkOnline.value) {
-                repository.deleteOrder(workspaceId, order.id)
-                clearPendingSyncKey(delKey)
-            }
+                // 3. Remove from local orders cache immediately
+                val updatedLocal = _localOrders.value.filterNot {
+                    (order.id.isNotBlank() && it.id == order.id) ||
+                        (order.orderNumber.isNotBlank() && it.orderNumber == order.orderNumber)
+                }
+                _localOrders.value = updatedLocal
+                localStore?.saveOrders(updatedLocal)
 
-            val ordDate = resolveOrderTimestampDate(order)
-            val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
-            syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
+                // 4. Sync workspace settings (tombstones) and delete from Cloud Firestore if online;
+                //    if offline, the deletion remains queued in _pendingSyncKeys and will auto-sync when online.
+                syncWorkspaceSettingsToCloud()
+                val deletedOnline = if (isCloudAuthenticated && isNetworkOnline.value && order.id.isNotBlank()) {
+                    val ok = repository.deleteOrder(workspaceId, order.id)
+                    if (ok) {
+                        clearPendingSyncKey(delKey)
+                    }
+                    ok
+                } else {
+                    false
+                }
 
-            logAuditEvent(
-                actionType = "ORDER_DELETED_PERMANENT",
-                entityId = order.id,
-                summary = "Menghapus permanen pesanan ${order.orderNumber} dari database",
-                beforeSnapshot = """{"id":"${order.id}","orderNumber":"${order.orderNumber}","total":${order.totalAmount}}""",
-                afterSnapshot = "{}"
-            )
-            showBanner("Pesanan ${order.orderNumber} berhasil dihapus permanen.")
+                val ordDate = resolveOrderTimestampDate(order)
+                val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
+                syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
+
+                val actorRoleText = if (_session.value.role == StaffRole.DEVELOPER) "Developer" else "Owner"
+                logAuditEvent(
+                    actionType = "ORDER_DELETED_PERMANENT",
+                    entityId = order.id.ifBlank { order.displayOrderNumber },
+                    summary = "$actorRoleText (@${_session.value.username}) menghapus permanen pesanan ${order.displayOrderNumber} dari database",
+                    beforeSnapshot = """{"id":"${order.id}","orderNumber":"${order.displayOrderNumber}","total":${order.totalAmount}}""",
+                    afterSnapshot = "{}"
+                )
+                if (deletedOnline) {
+                    showBanner("Pesanan ${order.displayOrderNumber} berhasil dihapus permanen.")
+                } else if (!isNetworkOnline.value) {
+                    showBanner("Pesanan ${order.displayOrderNumber} dihapus permanen di memori lokal (akan disinkronkan ke Cloud saat online).")
+                } else {
+                    showBanner("Pesanan ${order.displayOrderNumber} berhasil dihapus permanen.")
+                }
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -4076,7 +4156,7 @@ class WaffleoViewModel(
             logAuditEvent(
                 actionType = "CATALOG_DELETED",
                 entityId = record.id,
-                summary = "Menghapus item '${record.name}' (${record.category}) dari Cabang ${record.branchId}",
+                summary = "Menghapus item '${record.name}' (${record.category}) dari Cabang ${getBranchDisplayName(record.branchId)}",
                 beforeSnapshot = """{"id":"${record.id}","name":"${record.name}","category":"${record.category}","walkIn":${record.priceWalkIn}}""",
                 afterSnapshot = "{}"
             )
@@ -4830,11 +4910,11 @@ class WaffleoViewModel(
         logAuditEvent(
             actionType = "ACCOUNT_CREATED",
             entityId = "${cleanBranch}_$cleanUser",
-            summary = "Menambahkan akun ${role.label} '$cleanUser' khusus untuk cabang $displayBranch",
+            summary = "Menambahkan akun ${role.label} '$cleanUser' khusus untuk Cabang $displayBranch",
             beforeSnapshot = "{}",
-            afterSnapshot = """{"branch":"$cleanBranch","username":"$cleanUser","role":"${role.label}"}"""
+            afterSnapshot = """{"branch":"$displayBranch","username":"$cleanUser","role":"${role.label}"}"""
         )
-        showBanner("Akun '$cleanUser' (${role.label}) untuk cabang $displayBranch berhasil ditambahkan.")
+        showBanner("Akun '$cleanUser' (${role.label}) untuk Cabang $displayBranch berhasil ditambahkan.")
     }
 
     fun updateStaffAccount(
@@ -4856,7 +4936,7 @@ class WaffleoViewModel(
         }
 
         if (idx < 0) {
-            val err = "Akun '$targetUsername' tidak ditemukan di cabang ${getBranchDisplayName(targetBranchId)}."
+            val err = "Akun '$targetUsername' tidak ditemukan di Cabang ${getBranchDisplayName(targetBranchId)}."
             onError(err)
             showBanner(err)
             return
@@ -4930,7 +5010,7 @@ class WaffleoViewModel(
             logAuditEvent(
                 actionType = "ACCOUNT_DELETED",
                 entityId = "${targetBranchId}_$targetUsername",
-                summary = "Akun staff '$targetUsername' (${removed.displayName}) cabang ${getBranchDisplayName(targetBranchId)} dihapus oleh ${actor.username}",
+                summary = "Akun staff '$targetUsername' (${removed.displayName}) Cabang ${getBranchDisplayName(targetBranchId)} dihapus oleh ${actor.username}",
                 beforeSnapshot = """{"username":"$targetUsername","role":"${removed.role.label}"}""",
                 afterSnapshot = "{}"
             )
@@ -6102,6 +6182,10 @@ class WaffleoViewModel(
                 val recappedArr = JSONArray()
                 _recappedOrderIds.value.take(500).forEach { recappedArr.put(it) }
                 put("recappedOrderIds", recappedArr)
+
+                val deletedOrdersArr = JSONArray()
+                _deletedOrderIds.value.take(1000).forEach { deletedOrdersArr.put(it) }
+                put("deletedOrderIds", deletedOrdersArr)
             }.toString()
 
             repository.saveWorkspaceSetting(workspaceId, "global_config", payload)
@@ -6112,10 +6196,31 @@ class WaffleoViewModel(
     }
 
     private fun applyCloudWorkspaceSettings(settingsMap: Map<String, String>) {
-        if ("workspace_settings:all" in _pendingSyncKeys.value) return
         val raw = settingsMap["global_config"] ?: return
         try {
             val obj = JSONObject(raw)
+
+            // Always merge grow-only order deletion tombstones even if local workspace_settings sync is pending,
+            // preventing any offline/online race from resurrecting deleted orders or overwriting tombstones.
+            obj.optJSONArray("deletedOrderIds")?.let { arr ->
+                val cloudDeletedOrders = LinkedHashSet<String>()
+                for (i in 0 until arr.length()) {
+                    val s = arr.optString(i).trim()
+                    if (s.isNotBlank()) cloudDeletedOrders.add(s)
+                }
+                val mergedDeletedOrders = _deletedOrderIds.value + cloudDeletedOrders
+                if (mergedDeletedOrders != _deletedOrderIds.value) {
+                    _deletedOrderIds.value = mergedDeletedOrders
+                    localStore?.saveDeletedOrderIds(mergedDeletedOrders)
+                    val filteredOrders = _localOrders.value.filterNot { isOrderPermanentlyDeleted(it, mergedDeletedOrders) }
+                    if (filteredOrders.size != _localOrders.value.size) {
+                        _localOrders.value = filteredOrders
+                        localStore?.saveOrders(filteredOrders)
+                    }
+                }
+            }
+
+            if ("workspace_settings:all" in _pendingSyncKeys.value) return
 
             obj.optJSONArray("deletedBranchIds")?.let { arr ->
                 val cloudDeleted = mutableSetOf<String>()

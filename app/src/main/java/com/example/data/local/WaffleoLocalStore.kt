@@ -645,16 +645,18 @@ class WaffleoLocalStore(context: Context) {
             val list = mutableListOf<BranchProfile>()
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
+                val bId = obj.optString("branchId", "Global")
+                val rawName = obj.optString("name", "")
                 list.add(
                     BranchProfile(
-                        branchId = obj.optString("branchId", "Global"),
-                        name = obj.optString("name", ""),
+                        branchId = bId,
+                        name = com.example.data.model.formatCleanBranchName(rawName, bId),
                         location = obj.optString("location", ""),
                         ownerName = obj.optString("ownerName", ""),
                         ownerEmail = obj.optString("ownerEmail", ""),
                         ownerPhone = obj.optString("ownerPhone", ""),
                         ownerUsername = obj.optString("ownerUsername", "owner"),
-                        initializedFrom = obj.optString("initializedFrom", "Master Seed"),
+                        initializedFrom = com.example.data.model.sanitizeBranchIdsInText(obj.optString("initializedFrom", "Master Seed")),
                         createdAtText = obj.optString("createdAtText", "Default System")
                     )
                 )
@@ -970,6 +972,27 @@ class WaffleoLocalStore(context: Context) {
         }
     }
 
+    fun saveDeletedOrderIds(ids: Set<String>) {
+        val arr = JSONArray()
+        ids.take(1500).forEach { if (it.isNotBlank()) arr.put(it.trim()) }
+        prefs.edit().putString(KEY_DELETED_ORDERS, arr.toString()).apply()
+    }
+
+    fun loadDeletedOrderIds(): Set<String> {
+        val raw = prefs.getString(KEY_DELETED_ORDERS, null) ?: return emptySet()
+        return try {
+            val arr = JSONArray(raw)
+            val set = LinkedHashSet<String>()
+            for (i in 0 until arr.length()) {
+                val s = arr.optString(i).trim()
+                if (s.isNotBlank()) set.add(s)
+            }
+            set
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
     fun saveActiveSessionJson(sessionJson: String) {
         prefs.edit().putString(KEY_ACTIVE_SESSION, sessionJson).apply()
     }
@@ -1010,6 +1033,7 @@ class WaffleoLocalStore(context: Context) {
         private const val KEY_BANK_ACCOUNTS = "bank_accounts_json"
         private const val KEY_DIGITAL_WALLETS = "digital_wallets_json"
         private const val KEY_DELETED_BRANCHES = "deleted_branches_json"
+        private const val KEY_DELETED_ORDERS = "deleted_orders_json"
         private const val KEY_PRODUCTION_CLEAN_V1_DONE = "production_clean_v1_done"
         private const val KEY_ACTIVE_SESSION = "active_pos_session_json"
         private const val KEY_LAST_LOGIN_BRANCH = "last_login_branch_id"

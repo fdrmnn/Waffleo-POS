@@ -188,8 +188,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if isOwnerOrSharedWorkspace(userId);
 
-      // ORDERS: Delete is permanently blocked (allow delete: if false).
-      // Orders can only be transitioned to status == 'CANCELLED' (Cancel Order).
+      // ORDERS: Supports permanent deletion of erased orders by authorized workspace Owner.
       match /orders/{orderId} {
         allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(orderId);
         allow list: if isOwnerOrSharedWorkspace(userId);

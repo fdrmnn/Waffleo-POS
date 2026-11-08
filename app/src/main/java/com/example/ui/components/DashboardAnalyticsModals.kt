@@ -210,7 +210,7 @@ fun DashboardChannelTransactionsDialog(
                                 }
                             }
                             Text(
-                                text = "Periode: $periodLabel • Cabang: $branchName",
+                                text = "Periode: $periodLabel • Cabang ${com.example.data.model.formatCleanBranchName(branchName, branchName)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MutedCocoaText,
                                 maxLines = 1,
@@ -858,7 +858,7 @@ fun DashboardProductVariationAnalysisDialog(
                                 }
                             }
                             Text(
-                                text = "Analisis Variasi Pesanan • $periodLabel • $branchName",
+                                text = "Analisis Variasi Pesanan • $periodLabel • Cabang ${com.example.data.model.formatCleanBranchName(branchName, branchName)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MutedCocoaText,
                                 maxLines = 1,

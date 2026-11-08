@@ -155,6 +155,13 @@ Sebelumnya, sistem menggunakan slug nama cabang (misal: `"gabek"` atau `"cabang 
   - `MoneyManagerScreen.kt`
   menggunakan perbandingan presisi: `order.branchId == activeSession.branchId` (UUID).
 
+### Langkah 6: Pembersihan Format Tampilan Cabang & Nomor Pesanan di Front-End
+- **Nama Cabang Konsisten**: Seluruh UI (header, pop-up banner 2 detik, dialog buka/tutup toko, dropdown pilih cabang login, portal developer, dan ringkasan) selalu menampilkan label nama cabang ramah manusia (`"Cabang [Nama Cabang]"` seperti `"Cabang Gabek"`), bukan string UUID atau branch id mentah.
+- **Generator Nomor Pesanan**: Menggunakan `branchSlug` dari nama cabang resmi (`val cleanBranchName = getBranchDisplayName(activeBranch)` -> `branchSlug = "GABEK"`), menghasilkan nomor pesanan cloud yang rapi seperti `WFL-GABEK-YYYYMMDD-010`.
+- **Tampilan UI Nomor Pesanan**: Seluruh kartu pesanan, riwayat, dialog pembayaran, cetak struk thermal, pembatalan, dan hapus pesanan menggunakan `order.displayOrderNumber` (`WFL-010`).
+- **Sanitasi Data Historis**: Fungsi `sanitizeBranchIdsInText` dan deserializer `OrderTimelineEvent` membersihkan seluruh data historis dari database yang memuat slug branch ID panjang (seperti `WFL-BRANCHC372605...-20261108-010`), sehingga di seluruh lini UI secara otomatis tampil bersih dan konsisten sebagai `"WFL-010"`.
+- **Audit Log Grouping & Badge**: Modal audit log (`AuditLogGroupCard` dan `AuditLogDetailTimelineDialog`) menampilkan judul dan badge terverifikasi berbasis format bersih (`#10 • WFL-010`).
+
 ---
 
 ## 6. Verification & Test Scenarios

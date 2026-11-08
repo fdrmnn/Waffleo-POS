@@ -220,15 +220,18 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                 snapshot.documents.mapNotNull { doc ->
                     try {
                         val branchId = doc.getString("branchId") ?: return@mapNotNull null
+                        val rawName = doc.getString("name") ?: ""
+                        val cleanName = com.example.data.model.formatCleanBranchName(rawName, branchId)
+                        val rawInitFrom = doc.getString("initializedFrom") ?: "Master Seed"
                         BranchProfile(
                             branchId = branchId,
-                            name = doc.getString("name") ?: "",
+                            name = cleanName,
                             location = doc.getString("location") ?: "",
                             ownerName = doc.getString("ownerName") ?: "",
                             ownerEmail = doc.getString("ownerEmail") ?: "",
                             ownerPhone = doc.getString("ownerPhone") ?: "",
                             ownerUsername = doc.getString("ownerUsername") ?: "owner",
-                            initializedFrom = doc.getString("initializedFrom") ?: "Master Seed",
+                            initializedFrom = com.example.data.model.sanitizeBranchIdsInText(rawInitFrom),
                             createdAtText = doc.getString("createdAtText") ?: "Default System"
                         )
                     } catch (e: Exception) {
@@ -539,13 +542,13 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
             val payload = hashMapOf<String, Any>(
                 "userId" to userId,
                 "branchId" to profile.branchId,
-                "name" to profile.name,
+                "name" to profile.displayName,
                 "location" to profile.location,
                 "ownerName" to profile.ownerName,
                 "ownerEmail" to profile.ownerEmail,
                 "ownerPhone" to profile.ownerPhone,
                 "ownerUsername" to profile.ownerUsername.ifBlank { "owner" },
-                "initializedFrom" to profile.initializedFrom.ifBlank { "Master Seed" },
+                "initializedFrom" to com.example.data.model.sanitizeBranchIdsInText(profile.initializedFrom.ifBlank { "Master Seed" }),
                 "createdAtText" to profile.createdAtText.ifBlank { "Default System" },
                 "updatedAt" to FieldValue.serverTimestamp()
             )
