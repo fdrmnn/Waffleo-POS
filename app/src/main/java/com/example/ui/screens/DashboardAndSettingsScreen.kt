@@ -12,6 +12,7 @@ import com.example.data.model.BankAccountDetail
 import com.example.data.model.DigitalWalletDetail
 import com.example.data.model.canUserEditStaffAccount
 import com.example.data.model.canUserDeleteStaffAccount
+import com.example.data.model.capitalizeSentenceStart
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,7 +71,6 @@ import androidx.compose.material.icons.filled.ConfirmationNumber
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocalCafe
 import androidx.compose.material.icons.filled.Payments
@@ -123,6 +123,7 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -139,10 +140,10 @@ import com.example.data.model.StaffRole
 import com.example.data.model.groupAuditLogRecords
 import com.example.data.model.areCategoriesMatching
 import com.example.data.model.normalizeCategoryCanonical
-import com.example.ui.components.IngredientStockGaugeCard
 import com.example.ui.components.WaffleoNominalCalculatorDialog
 import com.example.ui.theme.AdonanPalette
-import com.example.ui.components.DashboardBankSettlementDialog
+import com.example.ui.components.DashboardAovDetailDialog
+import com.example.ui.components.DashboardDeductionsDialog
 import com.example.ui.components.DashboardLabaKotorDialog
 import com.example.ui.components.DashboardOrdersListDialog
 import com.example.ui.components.MediaDistributionDonutCard
@@ -194,18 +195,18 @@ fun DashboardScreen(
     val customModifierCategories by viewModel.customModifierCategories.collectAsState()
     val modifierToMenuCategoryMap by viewModel.modifierToMenuCategoryMap.collectAsState()
     val sessionState by viewModel.session.collectAsState()
+    val uiPrefs by viewModel.sessionUiPreferences.collectAsState()
 
-    var selectedPeriod by remember { mutableStateOf(HistoryFilterPeriod.TODAY) }
-    var customDays by remember { mutableIntStateOf(7) }
-
-    var isCustomDateRangeActive by remember { mutableStateOf(false) }
-    var customStartDateMillis by remember { mutableStateOf<Long?>(null) }
-    var customEndDateMillis by remember { mutableStateOf<Long?>(null) }
+    val selectedPeriod = uiPrefs.dashboardSelectedPeriod
+    val customDays = uiPrefs.dashboardCustomDays
+    val isCustomDateRangeActive = uiPrefs.dashboardIsCustomRangeActive
+    val customStartDateMillis = uiPrefs.dashboardCustomStartMillis
+    val customEndDateMillis = uiPrefs.dashboardCustomEndMillis
     var showCustomDatePickerDialog by remember { mutableStateOf(false) }
     var showOmzetDialog by remember { mutableStateOf(false) }
     var showLabaKotorDialog by remember { mutableStateOf(false) }
-    var showBcaSettlementDialog by remember { mutableStateOf(false) }
-    var showMandiriSettlementDialog by remember { mutableStateOf(false) }
+    var showDeductionsDialog by remember { mutableStateOf(false) }
+    var showAovDialog by remember { mutableStateOf(false) }
 
     val periodFilteredOrders = remember(
         allOrders, selectedPeriod, customDays, isCustomDateRangeActive, customStartDateMillis, customEndDateMillis
@@ -235,49 +236,13 @@ fun DashboardScreen(
     val uangMasukBersihSistem = remember(doneOrders, catalog) {
         doneOrders.sumOf { viewModel.calculateOrderNetAmount(it, catalog) }
     }
-    val saldoMasukBcaPlatform = remember(doneOrders, catalog) {
-        val platformNet = doneOrders
-            .filter { it.orderMedia in listOf("GrabFood", "GoFood", "ShopeeFood") }
-            .sumOf { viewModel.calculateOrderNetAmount(it, catalog) }
-        val bcaDirectNet = doneOrders
-            .filter { it.orderMedia !in listOf("GrabFood", "GoFood", "ShopeeFood") }
-            .sumOf { ord ->
-                val net = viewModel.calculateOrderNetAmount(ord, catalog)
-                val method = ord.paymentMethod
-                if (method.contains("BCA", ignoreCase = true)) {
-                    val isSplit = method.contains("Cash + QRIS", ignoreCase = true) ||
-                        (ord.splitQrisAmount > 0L && ord.splitCashAmount > 0L)
-                    if (isSplit) {
-                        if (ord.splitQrisAmount > 0L) ord.splitQrisAmount.coerceAtMost(net) else (net / 2)
-                    } else net
-                } else 0L
-            }
-        platformNet + bcaDirectNet
-    }
-    val saldoMasukMandiri = remember(doneOrders, catalog) {
+    val totalItemsSold = remember(doneOrders) {
         doneOrders.sumOf { ord ->
-            if (ord.orderMedia in listOf("GrabFood", "GoFood", "ShopeeFood")) {
-                0L
-            } else {
-                val net = viewModel.calculateOrderNetAmount(ord, catalog)
-                val method = ord.paymentMethod
-                val isSplit = method.contains("Cash + QRIS", ignoreCase = true) ||
-                    (ord.splitQrisAmount > 0L && ord.splitCashAmount > 0L)
-                val isBca = method.contains("BCA", ignoreCase = true)
-                val isMandiri = !isBca // Default QRIS and Transfer in Waffleo is Bank Mandiri
-
-                if (isSplit) {
-                    val qrisPart = if (ord.splitQrisAmount > 0L) ord.splitQrisAmount.coerceAtMost(net) else (net / 2)
-                    if (isMandiri) qrisPart else 0L
-                } else if (method.contains("QRIS", ignoreCase = true) || method.contains("Transfer", ignoreCase = true) || method.contains("Mandiri", ignoreCase = true)) {
-                    if (isMandiri) net else 0L
-                } else {
-                    0L
-                }
-            }
+            val parsed = ord.parsedLineItems
+            if (parsed.isNotEmpty()) parsed.sumOf { it.qty } else 1
         }
     }
-    // Estimasi Laba Kotor = Total Penjualan setelah Diskon dikurangi Biaya Platform / Fee Order (tanpa HPP Resep)
+    // Pendapatan Bersih Penjualan (Net Sales) = Total Penjualan setelah Diskon dikurangi Biaya Platform / Fee Order (tanpa HPP Resep)
     val labaKotor = uangMasukBersihSistem.coerceAtLeast(0L)
 
     val periodBounds = remember(
@@ -341,7 +306,7 @@ fun DashboardScreen(
             )
             HistoryFilterPeriod.THIS_MONTH -> Triple(
                 "Tren Pendapatan Bulanan per Tanggal",
-                "Omzet & uang masuk bersih per tanggal (Tgl 01 - 31)",
+                "Omzet & uang masuk bersih per tanggal (01 - 31)",
                 buildMonthlyDatesSalesSeries(doneOrders, calculateNet)
             )
             HistoryFilterPeriod.THIS_YEAR -> Triple(
@@ -385,7 +350,11 @@ fun DashboardScreen(
                         selectedText = selectedPeriod.label,
                         options = HistoryFilterPeriod.entries,
                         optionLabel = { it.label },
-                        onOptionSelected = { selectedPeriod = it },
+                        onOptionSelected = { nextPeriod ->
+                            viewModel.updateSessionUiPreferences {
+                                it.copy(dashboardSelectedPeriod = nextPeriod)
+                            }
+                        },
                         containerColor = ElevatedIvoryCard,
                         modifier = Modifier.width(160.dp),
                         testTagPrefix = "dashboard_period"
@@ -418,8 +387,12 @@ fun DashboardScreen(
                                     showCustomDatePickerDialog = true
                                 } else {
                                     val days = choice.split(" ")[0].toIntOrNull() ?: 7
-                                    customDays = days
-                                    isCustomDateRangeActive = false
+                                    viewModel.updateSessionUiPreferences {
+                                        it.copy(
+                                            dashboardCustomDays = days,
+                                            dashboardIsCustomRangeActive = false
+                                        )
+                                    }
                                 }
                             },
                             containerColor = ElevatedIvoryCard,
@@ -431,20 +404,19 @@ fun DashboardScreen(
             }
         }
 
-        // 1. Modern Executive KPI Row with Icon Badges & Margin %
+        // 1. Modern Executive KPI Row (Opsi A)
         item {
             ModernExecutiveKpiRow(
                 omzetGross = omzetPlatformGross,
                 potonganPlatform = totalPotonganPlatform,
                 totalDiskonPromo = totalDiskonPromo,
                 labaKotor = labaKotor,
-                saldoBcaPlatform = saldoMasukBcaPlatform,
-                saldoMandiriPlatform = saldoMasukMandiri,
                 doneCount = doneOrders.size,
+                totalItemsCount = totalItemsSold,
                 onOmzetClick = { showOmzetDialog = true },
                 onLabaKotorClick = { showLabaKotorDialog = true },
-                onBcaClick = { showBcaSettlementDialog = true },
-                onMandiriClick = { showMandiriSettlementDialog = true }
+                onDeductionsClick = { showDeductionsDialog = true },
+                onAovClick = { showAovDialog = true }
             )
         }
 
@@ -510,9 +482,13 @@ fun DashboardScreen(
             initialEndMillis = customEndDateMillis,
             onDismiss = { showCustomDatePickerDialog = false },
             onConfirm = { startMs, endMs ->
-                customStartDateMillis = startMs
-                customEndDateMillis = endMs
-                isCustomDateRangeActive = true
+                viewModel.updateSessionUiPreferences {
+                    it.copy(
+                        dashboardCustomStartMillis = startMs,
+                        dashboardCustomEndMillis = endMs,
+                        dashboardIsCustomRangeActive = true
+                    )
+                }
                 showCustomDatePickerDialog = false
             }
         )
@@ -538,27 +514,27 @@ fun DashboardScreen(
         )
     }
 
-    if (showBcaSettlementDialog) {
-        DashboardBankSettlementDialog(
-            bankName = "BCA",
+    if (showDeductionsDialog) {
+        DashboardDeductionsDialog(
             periodLabel = selectedPeriod.label,
-            totalSettlement = saldoMasukBcaPlatform,
+            omzetGross = omzetPlatformGross,
+            potonganPlatform = totalPotonganPlatform,
+            totalDiskonPromo = totalDiskonPromo,
             orders = doneOrders,
             catalog = catalog,
             viewModel = viewModel,
-            onDismiss = { showBcaSettlementDialog = false }
+            onDismiss = { showDeductionsDialog = false }
         )
     }
 
-    if (showMandiriSettlementDialog) {
-        DashboardBankSettlementDialog(
-            bankName = "Mandiri",
+    if (showAovDialog) {
+        DashboardAovDetailDialog(
             periodLabel = selectedPeriod.label,
-            totalSettlement = saldoMasukMandiri,
+            omzetGross = omzetPlatformGross,
             orders = doneOrders,
             catalog = catalog,
             viewModel = viewModel,
-            onDismiss = { showMandiriSettlementDialog = false }
+            onDismiss = { showAovDialog = false }
         )
     }
 }
@@ -883,10 +859,9 @@ fun SettingsScreen(
         listOf(
             SettingsTabMeta(0, "Menu", Icons.Default.RestaurantMenu),
             SettingsTabMeta(1, "Modifier", Icons.Default.Tune),
-            SettingsTabMeta(2, "Stok", Icons.Default.Inventory2),
-            SettingsTabMeta(3, "Promo", Icons.Default.ConfirmationNumber),
-            SettingsTabMeta(4, "Pengaturan Lainnya", Icons.Default.Storefront),
-            SettingsTabMeta(5, "Audit Log", Icons.Default.History)
+            SettingsTabMeta(2, "Promo", Icons.Default.ConfirmationNumber),
+            SettingsTabMeta(3, "Pengaturan Lainnya", Icons.Default.Storefront),
+            SettingsTabMeta(4, "Audit Log", Icons.Default.History)
         )
     }
 
@@ -1052,26 +1027,14 @@ fun SettingsScreen(
                 }
             }
 
-            // Primary Context Action Button (+ Menu / + Modifier / + Bahan / + Promo / + Akun)
-            if (isAllowedToEdit && selectedSection in 0..4) {
-                val actionLabel = when (selectedSection) {
-                    0 -> "Menu"
-                    1 -> "Modifier"
-                    2 -> "Bahan"
-                    3 -> "Promo"
-                    else -> "Akun"
-                }
+            // Primary Context Action Button (+ Menu / + Modifier) - Promo & Akun gunakan tombol di dalam tab masing-masing
+            if (isAllowedToEdit && selectedSection in 0..1) {
+                val actionLabel = if (selectedSection == 0) "Menu" else "Modifier"
                 Button(
                     onClick = {
                         when (selectedSection) {
                             0 -> showCreateModalForType = "MENU_ITEM" to (if (subFilter != "ALL") subFilter else "Egg Waffle")
                             1 -> showCreateModalForType = "MODIFIER" to (if (subFilter != "ALL") subFilter else (customModifierCategories.firstOrNull() ?: "Add-on"))
-                            2 -> showCreateModalForType = "INGREDIENT" to "RAW_MATERIAL"
-                            3 -> {
-                                editingPromoItem = null
-                                showPromoFormModal = true
-                            }
-                            4 -> showAddStaffModal = true
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -1257,51 +1220,6 @@ fun SettingsScreen(
             }
 
             2 -> {
-                val ingredients = remember(catalog, searchQuery, subFilter) {
-                    catalog.filter {
-                        it.recordType == "INGREDIENT" &&
-                            (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true))
-                    }.filter { ing ->
-                        if (subFilter == "LOW") {
-                            val minS = try { JSONObject(ing.metadataJson).optDouble("minStock", 300.0) } catch (e: Exception) { 300.0 }
-                            ing.stockQty <= minS
-                        } else true
-                    }
-                }
-                FilterChipRow(
-                    options = listOf(
-                        "ALL" to "Semua Bahan (${catalog.count { it.recordType == "INGREDIENT" }})",
-                        "LOW" to "Perlu Restock"
-                    ),
-                    selected = subFilter,
-                    onSelect = { subFilter = it }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 20.dp)
-                ) {
-                    items(ingredients, key = { it.id }) { item ->
-                        IngredientSettingsGridCard(
-                            item = item,
-                            canEdit = isAllowedToEdit,
-                            onQuickRestock = {
-                                val nextQty = item.stockQty + 1000.0
-                                viewModel.saveOrUpdateCatalogRecord(
-                                    item.copy(stockQty = nextQty),
-                                    "Quick Restock +1.000 ${item.stockUnit} untuk '${item.name}'"
-                                )
-                            },
-                            onEdit = { editingCatalogItem = item }
-                        )
-                    }
-                }
-            }
-
-            3 -> {
                 val promos = remember(catalog) {
                     catalog.filter { it.recordType == "PROMO" }
                 }
@@ -1335,7 +1253,7 @@ fun SettingsScreen(
                 )
             }
 
-            4 -> {
+            3 -> {
                 val platformConfigs = remember(catalog) {
                     catalog.filter { it.recordType == "BRANCH_CONFIG" }
                 }
@@ -1536,7 +1454,7 @@ fun SettingsScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Inventory2,
+                                            imageVector = Icons.Default.Layers,
                                             contentDescription = "Ekspor Backup",
                                             tint = DeepCaramelGold,
                                             modifier = Modifier.size(16.dp)
@@ -2284,7 +2202,7 @@ fun SettingsScreen(
                 }
             }
 
-            5 -> {
+            4 -> {
                 var auditPeriodMode by remember { mutableStateOf("ALL_TIME") }
                 var auditSelectedPeriod by remember { mutableStateOf(HistoryFilterPeriod.TODAY) }
                 var showAuditCustomDateDialog by remember { mutableStateOf(false) }
@@ -2310,7 +2228,6 @@ fun SettingsScreen(
                         val matchesFilter = when (subFilter) {
                             "ORDER" -> group.category == "ORDER"
                             "CATALOG" -> group.category == "CATALOG"
-                            "STOCK" -> group.category == "STOCK"
                             "STAFF" -> group.category == "STAFF"
                             else -> true
                         }
@@ -2372,7 +2289,6 @@ fun SettingsScreen(
                                 "ALL" to "Semua Aktivitas (${allGroupedLogs.size})",
                                 "ORDER" to "Transaksi & Order (${allGroupedLogs.count { it.category == "ORDER" }})",
                                 "CATALOG" to "Menu & Harga",
-                                "STOCK" to "Stok Bahan",
                                 "STAFF" to "Akses & Toko"
                             ),
                             selected = subFilter,
@@ -2713,7 +2629,7 @@ fun SettingsScreen(
         CatalogEditorDialog(
             initialRecord = record,
             isNew = false,
-            canDelete = isAllowedToEdit && record.recordType in listOf("MENU_ITEM", "MODIFIER", "INGREDIENT", "PROMO"),
+            canDelete = isAllowedToEdit && record.recordType in listOf("MENU_ITEM", "MODIFIER", "PROMO"),
             customCategories = if (record.recordType == "MENU_ITEM") allMenuCategories else allModifierCategories,
             availableModifiers = catalog.filter { it.recordType == "MODIFIER" && it.isActive },
             activePlatforms = activePlatforms,
@@ -2742,9 +2658,7 @@ fun SettingsScreen(
                 priceWalkIn = 0L,
                 priceGrabFood = 0L,
                 priceGoFood = 0L,
-                priceShopeeFood = 0L,
-                stockQty = 0.0,
-                stockUnit = "gram"
+                priceShopeeFood = 0L
             ),
             isNew = true,
             canDelete = false,
@@ -2892,6 +2806,9 @@ fun SettingsScreen(
         AuditLogDetailTimelineDialog(
             group = group,
             relatedOrder = relatedOrder,
+            catalog = catalog,
+            menuCategories = customMenuCategories,
+            modifierCategories = customModifierCategories,
             onDismiss = { selectedGroupedLog = null }
         )
     }
@@ -3003,17 +2920,19 @@ private fun EditBankAccountDialog(
 
                 WaffleoSoftTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = capitalizeSentenceStart(it) },
                     label = "Nama Bank",
                     placeholder = "Misal: Bank Mandiri, BCA, BRI",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 WaffleoSoftTextField(
                     value = ownerName,
-                    onValueChange = { ownerName = it },
+                    onValueChange = { ownerName = capitalizeSentenceStart(it) },
                     label = "Pemilik Rekening",
                     placeholder = "Nama pemilik rekening",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -3114,17 +3033,19 @@ private fun EditDigitalWalletDialog(
 
                 WaffleoSoftTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = capitalizeSentenceStart(it) },
                     label = "Nama Dompet Digital",
                     placeholder = "Misal: ShopeePay, GoPay, OVO, Dana",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 WaffleoSoftTextField(
                     value = ownerName,
-                    onValueChange = { ownerName = it },
+                    onValueChange = { ownerName = capitalizeSentenceStart(it) },
                     label = "Pemilik",
                     placeholder = "Nama pemilik akun",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -3986,133 +3907,6 @@ private fun ModifierSettingsGridCard(
 }
 
 @Composable
-private fun IngredientSettingsGridCard(
-    item: CatalogRecord,
-    canEdit: Boolean,
-    onQuickRestock: () -> Unit,
-    onEdit: () -> Unit
-) {
-    val minStock = remember(item.metadataJson) {
-        try { JSONObject(item.metadataJson).optDouble("minStock", 300.0) } catch (e: Exception) { 300.0 }
-    }
-    val isLow = item.stockQty <= minStock
-    val fillRatio = (item.stockQty / (minStock * 5.0).coerceAtLeast(1000.0)).toFloat().coerceIn(0.05f, 1f)
-
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = ElevatedIvoryCard),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (isLow) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = TerracottaDanger,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                    }
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = RichEspressoPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                SmallTagPill(
-                    text = "${item.stockQty.toInt()} ${item.stockUnit}",
-                    bg = if (isLow) SoftAmberBg else SoftSageBg,
-                    fg = if (isLow) TerracottaDanger else MatchaSageSuccess
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(7.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(SoftOatSurface)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(fillRatio)
-                        .clip(RoundedCornerShape(50))
-                        .background(if (isLow) TerracottaDanger else MatchaSageSuccess)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "HPP: ${WaffleoViewModel.formatIdr(item.costPerUnit)}/${item.stockUnit}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedCocoaText
-                )
-
-                if (canEdit) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = SoftSageBg,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .clickable(onClick = onQuickRestock)
-                        ) {
-                            Text(
-                                text = "+1.000",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MatchaSageSuccess,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                        Surface(
-                            shape = CircleShape,
-                            color = SoftOatSurface,
-                            modifier = Modifier
-                                .size(26.dp)
-                                .clip(CircleShape)
-                                .clickable(onClick = onEdit)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Edit",
-                                    tint = RichEspressoPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun PromoSettingsGridCard(
     promo: CatalogRecord,
     canEdit: Boolean,
@@ -4275,9 +4069,10 @@ private fun AddCategoryDialog(
 
                 WaffleoSoftTextField(
                     value = categoryName,
-                    onValueChange = { categoryName = it },
+                    onValueChange = { categoryName = capitalizeSentenceStart(it) },
                     label = "Nama Kategori",
                     placeholder = hint,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -4379,9 +4174,10 @@ private fun EditCategoryModalDialog(
 
                 WaffleoSoftTextField(
                     value = updatedName,
-                    onValueChange = { updatedName = it },
+                    onValueChange = { updatedName = capitalizeSentenceStart(it) },
                     label = "Nama Kategori",
                     placeholder = "Nama Kategori...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -4536,9 +4332,10 @@ private fun AddSubCategoryDialog(
 
                 WaffleoSoftTextField(
                     value = subCategoryName,
-                    onValueChange = { subCategoryName = it },
+                    onValueChange = { subCategoryName = capitalizeSentenceStart(it) },
                     label = "Nama Sub Kategori",
                     placeholder = hint,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -4637,9 +4434,10 @@ private fun EditSubCategoryDialog(
 
                 WaffleoSoftTextField(
                     value = updatedName,
-                    onValueChange = { updatedName = it },
+                    onValueChange = { updatedName = capitalizeSentenceStart(it) },
                     label = "Nama Sub Kategori",
                     placeholder = "Nama Sub Kategori...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -4776,7 +4574,7 @@ private fun getAuditBadgeInfo(actionType: String, category: String): AuditBadgeI
         actionType.contains("CATALOG_DELETED") -> AuditBadgeInfo("Menu Dihapus", Icons.Default.DeleteOutline, SoftTerracottaBg, TerracottaDanger)
         actionType.contains("CATALOG_CATEGORY") -> AuditBadgeInfo("Kategori Baru", Icons.Default.Add, SoftGoldHighlight, DeepCaramelGold)
         actionType.contains("CATALOG") -> AuditBadgeInfo("Katalog & Menu", Icons.Default.RestaurantMenu, SoftGoldHighlight, DeepCaramelGold)
-        actionType.contains("STOCK") -> AuditBadgeInfo("Stok Bahan Baku", Icons.Default.Inventory2, SoftOatSurface, RichEspressoPrimary)
+        actionType.contains("STOCK") -> AuditBadgeInfo("Arsip Sistem", Icons.Default.History, SoftOatSurface, RichEspressoPrimary)
         actionType.contains("STORE") -> AuditBadgeInfo("Operasional Toko", Icons.Default.Storefront, SoftOatSurface, RichEspressoPrimary)
         actionType.contains("STAFF") || actionType.contains("ACCOUNT") || actionType.contains("LOGIN") -> AuditBadgeInfo("Akses & Akun", Icons.Default.Person, SoftOatSurface, RichEspressoPrimary)
         actionType.contains("SECURITY") -> AuditBadgeInfo("Peringatan Sistem", Icons.Default.Warning, SoftTerracottaBg, TerracottaDanger)
@@ -4831,8 +4629,6 @@ private fun CatalogEditorDialog(
     var platformPricesMap by remember(initialRecord) {
         mutableStateOf(if (isNew) emptyMap() else initialRecord.getPlatformPricesMap())
     }
-    var stockQty by remember { mutableStateOf(if (isNew || initialRecord.stockQty == 0.0) "" else initialRecord.stockQty.toInt().toString()) }
-    var stockUnit by remember { mutableStateOf(if (isNew) "gram" else initialRecord.stockUnit) }
     var imageUrl by remember { mutableStateOf(if (isNew) "" else initialRecord.imageUrl) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
@@ -4855,7 +4651,6 @@ private fun CatalogEditorDialog(
     val categoryOptions = when (initialRecord.recordType) {
         "MENU_ITEM" -> (customCategories + listOf(initialRecord.category)).filter { it.isNotBlank() }.distinctBy { it.lowercase() }
         "MODIFIER" -> (customCategories + availableModifiers.map { it.category } + listOf(initialRecord.category)).filter { it.isNotBlank() }.distinctBy { it.lowercase() }
-        "INGREDIENT" -> listOf("RAW_MATERIAL")
         "PROMO" -> listOf("BUNDLING", "PERCENT", "NOMINAL_MIN", "PERCENT_CAP")
         else -> listOf(initialRecord.category)
     }
@@ -5009,11 +4804,13 @@ private fun CatalogEditorDialog(
                             WaffleoSoftTextField(
                                 value = customSubCategoryInput,
                                 onValueChange = {
-                                    customSubCategoryInput = it
-                                    subCategory = it.trim()
+                                    val formatted = capitalizeSentenceStart(it)
+                                    customSubCategoryInput = formatted
+                                    subCategory = formatted.trim()
                                 },
                                 label = "Sub Kategori (Kustom)",
                                 placeholder = "Ketik nama sub-kategori...",
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 modifier = Modifier.weight(1f)
                             )
                             Surface(
@@ -5056,40 +4853,19 @@ private fun CatalogEditorDialog(
                 WaffleoSoftTextField(
                     value = name,
                     onValueChange = {
-                        name = it
+                        val formatted = capitalizeSentenceStart(it)
+                        name = formatted
                         if (initialRecord.recordType == "BRANCH_CONFIG") {
-                            category = it
+                            category = formatted
                         }
                     },
                     label = if (initialRecord.recordType == "BRANCH_CONFIG") "Nama Platform" else "Nama",
                     placeholder = if (initialRecord.recordType == "BRANCH_CONFIG") "e.g. GrabFood, ShopeeFood..." else "Masukkan nama...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (initialRecord.recordType == "INGREDIENT") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        WaffleoSoftTextField(
-                            value = stockQty,
-                            onValueChange = { input ->
-                                val filtered = input.filter { ch -> ch.isDigit() || ch == '.' }
-                                if (filtered.count { it == '.' } <= 1) {
-                                    stockQty = filtered
-                                }
-                            },
-                            label = "Jumlah Stok",
-                            placeholder = "1000",
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.weight(1f)
-                        )
-                        WaffleoSoftTextField(
-                            value = stockUnit,
-                            onValueChange = { stockUnit = it },
-                            label = "Satuan (gram/ml/pcs)",
-                            placeholder = "gram",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                } else if (initialRecord.recordType == "BRANCH_CONFIG") {
+                if (initialRecord.recordType == "BRANCH_CONFIG") {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         CatalogPriceWithCalcField(
                             value = walkIn,
@@ -5606,7 +5382,7 @@ private fun CatalogEditorDialog(
                     }
                 }
 
-                // Footer Row: [ Hapus ] on Bottom-Left (for existing Menu/Modifier/Stok/Promo) + [ Batal | Simpan ] on Bottom-Right
+                // Footer Row: [ Hapus ] on Bottom-Left (for existing Menu/Modifier/Promo) + [ Batal | Simpan ] on Bottom-Right
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -5692,8 +5468,6 @@ private fun CatalogEditorDialog(
                                             priceGrabFood = grabPrice,
                                             priceGoFood = goPrice,
                                             priceShopeeFood = shopeePrice,
-                                            stockQty = stockQty.toDoubleOrNull() ?: 0.0,
-                                            stockUnit = stockUnit.ifBlank { "gram" },
                                             imageUrl = imageUrl.trim(),
                                             metadataJson = updatedMetadata
                                         )
@@ -6003,9 +5777,10 @@ private fun AddStaffAccountDialog(
 
                 WaffleoSoftTextField(
                     value = displayName,
-                    onValueChange = { displayName = it },
+                    onValueChange = { displayName = capitalizeSentenceStart(it) },
                     label = "Nama Staff",
                     placeholder = "Nama staff...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -6158,9 +5933,10 @@ private fun EditStaffAccountDialog(
                 // Nama Staff
                 WaffleoSoftTextField(
                     value = displayName,
-                    onValueChange = { displayName = it },
+                    onValueChange = { displayName = capitalizeSentenceStart(it) },
                     label = "Nama Lengkap / Panggilan",
                     placeholder = "Nama staff...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth(),
                     testTag = "edit_staff_name"
                 )
@@ -6292,7 +6068,10 @@ private fun EditStaffAccountDialog(
 private fun AuditLogNarrativeDetailView(
     subLog: AuditLogRecord,
     group: GroupedAuditLog,
-    relatedOrder: OrderRecord?
+    relatedOrder: OrderRecord?,
+    catalog: List<CatalogRecord> = emptyList(),
+    menuCategories: List<String> = listOf("Egg Waffle", "Drinks"),
+    modifierCategories: List<String> = listOf("Flavour", "Add-on", "Sweetness", "Ice Level")
 ) {
     val beforeObj = remember(subLog.beforeSnapshot) {
         try {
@@ -6329,9 +6108,18 @@ private fun AuditLogNarrativeDetailView(
             val netBca = afterObj?.optLong("netEnteredBca", 0L) ?: 0L
 
             val itemsPayloadStr = afterObj?.optString("itemsPayload")?.ifBlank { null } ?: relatedOrder?.itemsPayload ?: ""
-            val parsedItems = remember(itemsPayloadStr) {
+            val parsedItems = remember(itemsPayloadStr, catalog, menuCategories, modifierCategories) {
                 if (itemsPayloadStr.isNotBlank() && itemsPayloadStr != "[]") {
-                    try { CartLineItem.deserializeList(itemsPayloadStr) } catch (e: Exception) { emptyList() }
+                    try {
+                        com.example.data.model.WaffleoOrderEngine.sortCartLineItems(
+                            items = CartLineItem.deserializeList(itemsPayloadStr),
+                            catalog = catalog,
+                            menuCategories = menuCategories,
+                            modifierCategories = modifierCategories
+                        )
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
                 } else emptyList()
             }
             val itemsSummaryText = afterObj?.optString("itemsSummary")?.ifBlank { null } ?: relatedOrder?.itemsSummary ?: ""
@@ -6938,7 +6726,7 @@ private fun AuditLogNarrativeDetailView(
                             color = MatchaSageSuccess
                         )
                         Text(
-                            text = "Pesanan telah diserahkan kepada pelanggan dan transaksi ditutup. Stok bahan baku otomatis dipotong dari inventory.",
+                            text = "Pesanan telah diserahkan kepada pelanggan dan transaksi ditutup.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MutedCocoaText
                         )
@@ -7046,22 +6834,11 @@ private fun AuditLogNarrativeDetailView(
                         color = TerracottaDanger
                     )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Dibatalkan oleh: @$cancelledBy",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedCocoaText
-                        )
-                        Text(
-                            text = "Stok bahan aman (tidak dikurangi)",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MatchaSageSuccess
-                        )
-                    }
+                    Text(
+                        text = "Dibatalkan oleh: @$cancelledBy",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedCocoaText
+                    )
                 }
             }
         }
@@ -7282,7 +7059,6 @@ private fun AuditLogNarrativeDetailView(
                             "grab", "priceGrabFood" -> "Harga GrabFood"
                             "gofood", "priceGoFood" -> "Harga GoFood"
                             "shopee", "priceShopeeFood" -> "Harga ShopeeFood"
-                            "stock", "stockQty" -> "Kuantitas Stok"
                             "active", "isActive" -> "Status Aktif"
                             "role" -> "Hak Akses"
                             else -> k.replaceFirstChar { it.uppercase() }
@@ -7353,6 +7129,9 @@ private fun AuditLogNarrativeDetailView(
 private fun AuditLogDetailTimelineDialog(
     group: GroupedAuditLog,
     relatedOrder: OrderRecord?,
+    catalog: List<CatalogRecord> = emptyList(),
+    menuCategories: List<String> = listOf("Egg Waffle", "Drinks"),
+    modifierCategories: List<String> = listOf("Flavour", "Add-on", "Sweetness", "Ice Level"),
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -7719,7 +7498,10 @@ private fun AuditLogDetailTimelineDialog(
                                     AuditLogNarrativeDetailView(
                                         subLog = subLog,
                                         group = group,
-                                        relatedOrder = relatedOrder
+                                        relatedOrder = relatedOrder,
+                                        catalog = catalog,
+                                        menuCategories = menuCategories,
+                                        modifierCategories = modifierCategories
                                     )
                                 }
                             }

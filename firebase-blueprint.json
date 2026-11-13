@@ -165,7 +165,7 @@
     },
     "CatalogRecord": {
       "title": "CatalogRecord",
-      "description": "Stores editable POS master data: Menu items (Egg Waffle toppings, Drinks), Modifiers (Flavour, Add-on, Sweetness, Ice), Ingredients, Promos, and Branch configs.",
+      "description": "Stores editable POS master data: Menu items (Egg Waffle toppings, Drinks), Modifiers (Flavour, Add-on, Sweetness, Ice), Promos, and Branch configs.",
       "type": "object",
       "properties": {
         "userId": {
@@ -174,7 +174,7 @@
         },
         "recordType": {
           "type": "string",
-          "enum": ["MENU_ITEM", "MODIFIER", "INGREDIENT", "PROMO", "BRANCH_CONFIG"],
+          "enum": ["MENU_ITEM", "MODIFIER", "PROMO", "BRANCH_CONFIG"],
           "description": "Type of master catalog entity."
         },
         "branchId": {
@@ -183,11 +183,11 @@
         },
         "name": {
           "type": "string",
-          "description": "Display name of the menu item, modifier, ingredient, promo, or branch."
+          "description": "Display name of the menu item, modifier, promo, or branch."
         },
         "category": {
           "type": "string",
-          "description": "Category or group (e.g. Egg Waffle, Drinks, FLAVOUR, ADD_ON, SWEETNESS, ICE, RAW_MATERIAL)."
+          "description": "Category or group (e.g. Egg Waffle, Drinks, FLAVOUR, ADD_ON, SWEETNESS, ICE)."
         },
         "priceWalkIn": {
           "type": "integer",
@@ -205,21 +205,9 @@
           "type": "integer",
           "description": "ShopeeFood platform price in IDR."
         },
-        "stockQty": {
-          "type": "number",
-          "description": "Current ingredient stock quantity."
-        },
-        "stockUnit": {
-          "type": "string",
-          "description": "Unit of measure for ingredient stock (gram, ml, pcs, butir)."
-        },
-        "costPerUnit": {
-          "type": "integer",
-          "description": "Cost per unit in IDR for HPP calculation."
-        },
         "metadataJson": {
           "type": "string",
-          "description": "Structured metadata (subCategory, recipe BOM links, promo rules, or branch configs)."
+          "description": "Structured metadata (subCategory, platform prices, promo rules, or branch configs)."
         },
         "imageUrl": {
           "type": "string",
@@ -250,9 +238,6 @@
         "priceGrabFood",
         "priceGoFood",
         "priceShopeeFood",
-        "stockQty",
-        "stockUnit",
-        "costPerUnit",
         "metadataJson",
         "isActive",
         "createdAt",
@@ -261,7 +246,7 @@
     },
     "AuditLogRecord": {
       "title": "AuditLogRecord",
-      "description": "Immutable append-only audit trail recording all data creations, edits, cancellations, stock deductions, and store status changes.",
+      "description": "Immutable append-only audit trail recording all data creations, edits, cancellations, and store status changes.",
       "type": "object",
       "properties": {
         "userId": {
@@ -411,7 +396,7 @@
       "schema": {
         "$ref": "#/entities/CatalogRecord"
       },
-      "description": "POS master catalog storing menu items, modifiers, ingredients, promos, and branch configs."
+      "description": "POS master catalog storing menu items, modifiers, promos, and branch configs."
     },
     "/users/{userId}/audit_logs/{logId}": {
       "schema": {

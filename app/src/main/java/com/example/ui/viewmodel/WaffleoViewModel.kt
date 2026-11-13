@@ -12,11 +12,14 @@ import com.example.data.model.DailyChannelRecapItem
 import com.example.data.model.MoneyAccountGroupDef
 import com.example.data.model.BankAccountDetail
 import com.example.data.model.DigitalWalletDetail
+import com.example.data.model.ExpenseNoteMode
+import com.example.data.model.ExpenseSubCategoryInputConfig
 import com.example.data.model.MoneyBookmarkRecord
 import com.example.data.model.MoneyCategoryDef
 import com.example.data.model.MoneyRepetitionOption
 import com.example.data.model.MoneyTransactionRecord
 import com.example.data.model.MoneyTransactionType
+import com.example.data.model.parseQuantityAndUnitFromDescription
 import com.example.data.model.OrderMedia
 import com.example.data.model.OrderPaymentLedgerEntry
 import com.example.data.model.OrderRecord
@@ -33,7 +36,10 @@ import com.example.data.model.StaffRole
 import com.example.data.model.WaffleoPromoEngine
 import com.example.data.model.WaffleoSeedData
 import com.example.data.model.areCategoriesMatching
+import com.example.data.model.capitalizeSentenceStart
 import com.example.data.model.normalizeCategoryCanonical
+import com.example.data.model.OrderProcessingStage
+import com.example.data.model.WaffleoOrderEngine
 import com.example.data.repository.WaffleoRepository
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -79,6 +85,24 @@ enum class HistoryFilterPeriod(val label: String) {
     THIS_YEAR("This Year"),
     CUSTOM("Custom")
 }
+
+data class SessionUiPreferences(
+    val ordersGridColumns: Int = 1,
+    val ordersItemDisplayFormat: Int = 1, // Default: Tampilan 1 (Checklist per unit item)
+    val historySelectedTabIndex: Int = 0,
+    val historySelectedPeriod: HistoryFilterPeriod = HistoryFilterPeriod.TODAY,
+    val historyCustomDays: Int = 14,
+    val historyIsCustomRangeActive: Boolean = false,
+    val historyCustomStartMillis: Long? = null,
+    val historyCustomEndMillis: Long? = null,
+    val historySearchQuery: String = "",
+    val dashboardSelectedPeriod: HistoryFilterPeriod = HistoryFilterPeriod.TODAY,
+    val dashboardCustomDays: Int = 7,
+    val dashboardIsCustomRangeActive: Boolean = false,
+    val dashboardCustomStartMillis: Long? = null,
+    val dashboardCustomEndMillis: Long? = null,
+    val moneyDateHeaderLastTimes: Map<String, String> = emptyMap()
+)
 
 data class ActivePosSession(
     val branchId: String = "Global",
@@ -148,8 +172,49 @@ class WaffleoViewModel(
     )
     val session: StateFlow<ActivePosSession> = _session.asStateFlow()
 
+    // Session-scoped UI Preferences (persisted during same login session & branch, reset on logout/login/portal switch)
+    private val _sessionUiPreferences = MutableStateFlow(SessionUiPreferences())
+    val sessionUiPreferences: StateFlow<SessionUiPreferences> = _sessionUiPreferences.asStateFlow()
+
+    // Selected Menu Tab (All | Egg Waffle | Drinks)
+    private val _selectedMenuTab = MutableStateFlow(MenuCategoryTab.ALL)
+    val selectedMenuTab: StateFlow<MenuCategoryTab> = _selectedMenuTab.asStateFlow()
+
+    fun setOrdersGridColumns(columns: Int) {
+        val safeCols = if (columns == 2) 2 else 1
+        _sessionUiPreferences.value = _sessionUiPreferences.value.copy(ordersGridColumns = safeCols)
+    }
+
+    fun setOrdersItemDisplayFormat(format: Int) {
+        val safeFormat = if (format == 2) 2 else 1
+        _sessionUiPreferences.value = _sessionUiPreferences.value.copy(ordersItemDisplayFormat = safeFormat)
+    }
+
+    fun setMoneyDateHeaderLastTime(dateKey: String, timeText: String) {
+        val updated = recordMoneyDateHeaderLastTime(
+            lastTimesByDate = _sessionUiPreferences.value.moneyDateHeaderLastTimes,
+            dateKey = dateKey,
+            timeText = timeText
+        )
+        _sessionUiPreferences.value = _sessionUiPreferences.value.copy(moneyDateHeaderLastTimes = updated)
+    }
+
+    fun updateSessionUiPreferences(transform: (SessionUiPreferences) -> SessionUiPreferences) {
+        _sessionUiPreferences.value = transform(_sessionUiPreferences.value)
+    }
+
+    fun resetSessionUiPreferences() {
+        _sessionUiPreferences.value = SessionUiPreferences()
+        _selectedMenuTab.value = MenuCategoryTab.ALL
+    }
+
     private fun updateAndPersistSession(newSession: ActivePosSession) {
+        val prev = _session.value
+        val isSessionBoundaryChanged = shouldResetSessionUiPreferences(prev, newSession)
         _session.value = newSession
+        if (isSessionBoundaryChanged) {
+            resetSessionUiPreferences()
+        }
         localStore?.saveActiveSessionJson(newSession.toJsonString())
         val branchOpen = localStore?.loadStoreOpenStatus(newSession.branchId)
         if (branchOpen != null) {
@@ -214,10 +279,6 @@ class WaffleoViewModel(
     // Current Navigation Screen
     private val _currentDestination = MutableStateFlow(MainNavDestination.MENUS)
     val currentDestination: StateFlow<MainNavDestination> = _currentDestination.asStateFlow()
-
-    // Selected Menu Tab (All | Egg Waffle | Drinks)
-    private val _selectedMenuTab = MutableStateFlow(MenuCategoryTab.ALL)
-    val selectedMenuTab: StateFlow<MenuCategoryTab> = _selectedMenuTab.asStateFlow()
 
     // Cart State
     private val _cartMedia = MutableStateFlow(OrderMedia.WALK_IN)
@@ -342,7 +403,7 @@ class WaffleoViewModel(
     private val _localSeededCatalog = MutableStateFlow(
         (localStore?.loadCatalog()?.takeIf { it.isNotEmpty() }
             ?: WaffleoSeedData.defaultCatalogRecords(workspaceId))
-            .filterNot { isBranchDeleted(it.branchId) }
+            .filterNot { isBranchDeleted(it.branchId) || it.recordType.equals("INGREDIENT", ignoreCase = true) }
     )
     private val _localOrders = MutableStateFlow<List<OrderRecord>>(
         (localStore?.loadOrders()?.takeIf { it.isNotEmpty() }
@@ -366,11 +427,16 @@ class WaffleoViewModel(
                 val pending = _pendingSyncKeys.value
                 val cleanedCloud = cloudList.filter { rec ->
                     rec.id !in WaffleoSeedData.legacyDummyCatalogIds &&
+                        !rec.recordType.equals("INGREDIENT", ignoreCase = true) &&
                         !isBranchDeleted(rec.branchId, deletedSet) &&
                         "catalog_delete:${rec.id}" !in pending
                 }
                 if (cleanedCloud.isEmpty()) {
-                    localList.filterNot { isBranchDeleted(it.branchId, deletedSet) || "catalog_delete:${it.id}" in pending }
+                    localList.filterNot {
+                        it.recordType.equals("INGREDIENT", ignoreCase = true) ||
+                            isBranchDeleted(it.branchId, deletedSet) ||
+                            "catalog_delete:${it.id}" in pending
+                    }
                 } else {
                     val mergedMap = LinkedHashMap<String, CatalogRecord>()
                     cleanedCloud.forEach { cloudRec ->
@@ -379,7 +445,8 @@ class WaffleoViewModel(
                         }
                     }
                     localList.forEach { localRec ->
-                        if (!isBranchDeleted(localRec.branchId, deletedSet) &&
+                        if (!localRec.recordType.equals("INGREDIENT", ignoreCase = true) &&
+                            !isBranchDeleted(localRec.branchId, deletedSet) &&
                             "catalog_delete:${localRec.id}" !in pending &&
                             ("catalog:${localRec.id}" in pending || !mergedMap.containsKey(localRec.id))
                         ) {
@@ -730,6 +797,35 @@ class WaffleoViewModel(
         _transferFeeAccountChoice.value = clean
         localStore?.saveTransferFeeAccountChoice(clean)
         syncWorkspaceSettingsToCloud()
+    }
+
+    private val _expenseSubCategoryConfigs = MutableStateFlow<Map<String, ExpenseSubCategoryInputConfig>>(
+        localStore?.loadExpenseSubCategoryConfigs() ?: emptyMap()
+    )
+    val expenseSubCategoryConfigs: StateFlow<Map<String, ExpenseSubCategoryInputConfig>> =
+        _expenseSubCategoryConfigs.asStateFlow()
+
+    fun saveExpenseSubCategoryConfig(config: ExpenseSubCategoryInputConfig) {
+        if (config.categoryName.isBlank() && config.subCategoryName.isBlank()) return
+        val key = config.configKey
+        val current = _expenseSubCategoryConfigs.value
+        if (current[key] == config) return
+        val updated = current.toMutableMap().apply { put(key, config) }
+        _expenseSubCategoryConfigs.value = updated
+        localStore?.saveExpenseSubCategoryConfigs(updated)
+        syncWorkspaceSettingsToCloud()
+    }
+
+    fun resolveExpenseSubCategoryConfig(
+        categoryName: String,
+        subCategoryName: String
+    ): ExpenseSubCategoryInputConfig? {
+        return resolveExpenseSubCategoryConfigFromState(
+            categoryName = categoryName,
+            subCategoryName = subCategoryName,
+            savedConfigs = _expenseSubCategoryConfigs.value,
+            transactions = _allMoneyTransactions.value
+        )
     }
 
     val moneyTransactions: StateFlow<List<MoneyTransactionRecord>> = combine(
@@ -1271,7 +1367,49 @@ class WaffleoViewModel(
                         mergedMap[localOrd.id] = localOrd
                     }
                 }
-                val mergedList = mergedMap.values.sortedBy { it.sequenceIndex }
+                val mergedList = mergedMap.values.sortedBy { it.sequenceIndex }.toMutableList()
+
+                // Auto-reconciliation khusus pesanan WFL-001 (10 Nov 2026):
+                // Original 1/2 Chocolate + 1/2 Hazelnut direvisi dari Rp 21.500 menjadi Rp 22.000 (pembulatan 500 ke atas)
+                val targetNov10OrderIdx = mergedList.indexOfFirst { ord ->
+                    (ord.orderNumber.contains("20261110-001") || ord.orderNumber.endsWith("-001") || ord.id.contains("20261110")) &&
+                        ord.totalAmount == 21500L &&
+                        ord.itemsSummary.contains("1/2", ignoreCase = true)
+                }
+                if (targetNov10OrderIdx >= 0) {
+                    val targetOrder = mergedList[targetNov10OrderIdx]
+                    val updatedItems = CartLineItem.deserializeList(targetOrder.itemsPayload).map { item ->
+                        if (item.unitPriceWalkIn == 21500L || item.unitPriceFor(OrderMedia.fromLabel(targetOrder.orderMedia)) == 21500L) {
+                            item.copy(
+                                unitPriceWalkIn = 22000L,
+                                unitPriceGrabFood = if (item.unitPriceGrabFood > 0L) item.unitPriceGrabFood else 22000L,
+                                unitPriceGoFood = if (item.unitPriceGoFood > 0L) item.unitPriceGoFood else 22000L,
+                                unitPriceShopeeFood = if (item.unitPriceShopeeFood > 0L) item.unitPriceShopeeFood else 22000L
+                            )
+                        } else item
+                    }
+                    val updatedLedger = targetOrder.getPaymentLedger().map { pay ->
+                        if (pay.amount == 21500L) {
+                            pay.copy(amount = 22000L)
+                        } else pay
+                    }
+                    val revisedOrder = targetOrder.copy(
+                        subtotalAmount = 22000L,
+                        totalAmount = 22000L,
+                        paidAmount = 22000L,
+                        cashReceivedAmount = if (targetOrder.cashReceivedAmount == 21500L) 22000L else targetOrder.cashReceivedAmount,
+                        itemsPayload = CartLineItem.serializeList(updatedItems),
+                        paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(updatedLedger),
+                        shortfallAmount = 0L,
+                        isPaid = true
+                    )
+                    mergedList[targetNov10OrderIdx] = revisedOrder
+                    mergedMap[revisedOrder.id] = revisedOrder
+                    viewModelScope.launch {
+                        syncOrderToCloud(revisedOrder, isNew = false)
+                    }
+                }
+
                 if (mergedList != _localOrders.value) {
                     _localOrders.value = mergedList
                     localStore?.saveOrders(mergedList)
@@ -2068,12 +2206,12 @@ class WaffleoViewModel(
             logAuditEvent(
                 actionType = "STORE_CLOSED_AUTO_SYNC",
                 entityId = displayBranch,
-                summary = "Toko Cabang $displayBranch DITUTUP • Rekapitulasi Shift (${shiftUnrecappedOrders.size} pesanan, ${formatIdr(totalNetIncome)}) otomatis disinkronkan ke Money Manager",
+                summary = "Toko Cabang $displayBranch DITUTUP • Rekapitulasi Shift (${shiftUnrecappedOrders.size} pesanan, ${formatIdr(totalNetIncome)}) tersimpan ke Money Manager",
                 beforeSnapshot = """{"isStoreOpen":$before}""",
                 afterSnapshot = """{"isStoreOpen":$after,"shiftOrders":${shiftUnrecappedOrders.size},"autoSyncedChannels":$channelCount,"totalNetIncome":$totalNetIncome}"""
             )
             if (channelCount > 0) {
-                showBanner("Toko Cabang $displayBranch Ditutup • Rekap Shift ${formatIdr(totalNetIncome)} (${shiftUnrecappedOrders.size} pesanan) tersinkronisasi ke Money Manager")
+                showBanner("Toko Cabang $displayBranch Ditutup • Rekap Shift ${formatIdr(totalNetIncome)} tersimpan ke Money Manager")
             } else {
                 showBanner("Status Toko Cabang $displayBranch: $statusLabel")
             }
@@ -2137,7 +2275,16 @@ class WaffleoViewModel(
                 (p1 + p2 - polosPrice).coerceAtLeast(p1)
             }
             safeHalf && primary2 != null -> {
-                ((p1 + p2) / 2.0).roundToLong()
+                val halfRaw = (p1 + p2) / 2.0
+                val halfRounded = halfRaw.roundToLong()
+                // Aturan Waffleo: Jika hasil 1/2 porsi berujung 500 perak, bulatkan ke atas ke 1000 terdekat
+                if (halfRounded % 1000L == 500L) {
+                    halfRounded + 500L
+                } else if (halfRaw > halfRounded.toDouble()) {
+                    kotlin.math.ceil(halfRaw).toLong()
+                } else {
+                    halfRounded
+                }
             }
             else -> p1
         }
@@ -2163,7 +2310,12 @@ class WaffleoViewModel(
         val effHalf = canMultiTopping && isHalfHalf && primary2 != null
         val effDouble = canMultiTopping && isDoubleTopping && primary2 != null
         val flvName = flavour?.name ?: "Original"
-        val addOnNames = addOns.map { it.name }.sorted()
+        val addOnNames = WaffleoOrderEngine.sortModifierNamesBySettings(
+            modifierNames = addOns.map { it.name },
+            catalog = catalogRecords.value,
+            modifierCategories = _customModifierCategories.value
+        )
+        val normalizedAddOnSet = addOnNames.map { it.lowercase().trim() }.sorted()
 
         val walkInPrice = calculateEggWafflePriceForMedia(OrderMedia.WALK_IN, primary1, effHalf, effDouble, primary2, flavour, addOns)
         val grabPrice = calculateEggWafflePriceForMedia(OrderMedia.GRABFOOD, primary1, effHalf, effDouble, primary2, flavour, addOns)
@@ -2179,7 +2331,7 @@ class WaffleoViewModel(
                 it.isDoubleTopping == effDouble &&
                 it.secondaryItemId == (if (effHalf || effDouble) primary2?.id.orEmpty() else "") &&
                 it.flavourName == flvName &&
-                it.addOnNames == addOnNames
+                it.addOnNames.map { m -> m.lowercase().trim() }.sorted() == normalizedAddOnSet
         }
 
         if (existingIdx >= 0) {
@@ -2355,11 +2507,26 @@ class WaffleoViewModel(
     }
 
     fun setCartNotes(notes: String) {
-        _cartNotes.value = capitalizeWords(notes)
+        _cartNotes.value = capitalizeSentenceStart(notes)
     }
 
     fun setSelectedPromo(promoId: String) {
+        val prevPromoId = _selectedPromoId.value
         _selectedPromoId.value = promoId
+        val selectedRecord = catalogRecords.value.firstOrNull { it.recordType == "PROMO" && it.id == promoId }
+        val selectedConfig = selectedRecord?.let { PromoConfig.fromCatalogRecord(it) }
+        val selectedVoucher = selectedConfig?.voucherCode?.trim()?.uppercase().orEmpty()
+        if (selectedVoucher.isNotBlank()) {
+            _cartVoucherCode.value = selectedVoucher
+        } else {
+            val prevRecord = catalogRecords.value.firstOrNull { it.recordType == "PROMO" && it.id == prevPromoId }
+            val prevVoucher = prevRecord?.let { PromoConfig.fromCatalogRecord(it).voucherCode.trim().uppercase() }.orEmpty()
+            if (promoId.equals("NONE", ignoreCase = true) ||
+                (prevVoucher.isNotBlank() && _cartVoucherCode.value.equals(prevVoucher, ignoreCase = true))
+            ) {
+                _cartVoucherCode.value = ""
+            }
+        }
         reconcileCartPrepaymentAfterChange()
     }
 
@@ -2470,6 +2637,22 @@ class WaffleoViewModel(
             }
         }
         return map
+    }
+
+    fun getEligiblePromosForCart(
+        items: List<CartLineItem> = _cartItems.value,
+        media: OrderMedia = _cartMedia.value,
+        allCatalog: List<CatalogRecord> = catalogRecords.value,
+        evaluationTimeMillis: Long = resolveCartEffectiveTimestampMillis()
+    ): List<CatalogRecord> {
+        return WaffleoPromoEngine.filterEligiblePromosForCart(
+            cartItems = items,
+            media = media,
+            activeBranchId = _session.value.branchId,
+            catalog = allCatalog,
+            dynamicUsageMap = computeDynamicPromoUsageMap(),
+            evaluationTimeMillis = evaluationTimeMillis
+        )
     }
 
     fun evaluateCartPromoDetails(
@@ -2843,10 +3026,11 @@ class WaffleoViewModel(
         }
         val platformFee = calculatePlatformDeduction(newTotal, media)
         val netEnteredSystem = calculateNetEnteredSystemAmount(newTotal, media)
-        val summaryText = items.joinToString("\n") { item ->
+        val sortedOrderItems = sortOrderLineItems(items, separateNewRevisionAdditions = false)
+        val summaryText = sortedOrderItems.joinToString("\n") { item ->
             "${item.qty}x ${item.formattedTitle()} [${item.formattedCustomization()}]"
         }
-        val payloadJson = CartLineItem.serializeList(items)
+        val payloadJson = CartLineItem.serializeList(sortedOrderItems)
         val currentEditing = _editingOrder.value
 
         viewModelScope.launch {
@@ -3048,6 +3232,10 @@ class WaffleoViewModel(
                 }
 
                 val orderIdPrefix = if (isBackdatedCart) "v1_ord_bd_" else "v1_ord_"
+                val initialPayCalc = WaffleoOrderEngine.recalculateOrderPaymentStatus(
+                    newTotalAmount = newTotal,
+                    netPaidAmount = paidNow
+                )
                 val newOrder = OrderRecord(
                     id = "${orderIdPrefix}${nowMs}_${UUID.randomUUID().toString().take(4)}",
                     userId = workspaceId,
@@ -3076,6 +3264,11 @@ class WaffleoViewModel(
                     createdBy = _session.value.username,
                     paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(ledger),
                     orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
+                    processingStage = 0,
+                    historicalProducedItemsPayload = "[]",
+                    revisionCount = 0,
+                    overpaidAmount = 0L,
+                    settlementStatus = if (media.isPlatform || isOrderPaid) "PAID_EXACT" else initialPayCalc.settlementStatus,
                     createdAt = com.google.firebase.Timestamp(Date(nowMs)),
                     updatedAt = com.google.firebase.Timestamp(Date(nowMs))
                 )
@@ -3126,50 +3319,23 @@ class WaffleoViewModel(
                 showBanner("Pesanan ${newOrder.displayOrderNumber} berhasil dikirim ke halaman Orders.")
                 onSuccess()
             } else {
-                // APPLY CHANGES TO EXISTING EDITED ORDER (Preserving sequenceIndex!)
+                // APPLY CHANGES TO EXISTING EDITED ORDER (Preserving sequenceIndex, completed ✅ items at top, new items at bottom!)
                 val previousPaid = maxOf(currentEditing.paidAmount, _cartPaidAmount.value)
                 val wasPaidBefore = currentEditing.isPaid || _cartIsPaid.value || previousPaid > 0L
 
-                val isStillPaid: Boolean
-                val shortfall: Long
-                val changeDue: Long
-                val effectivePaidAmount: Long
-
-                if (media.isPlatform) {
-                    // Platform orders are always settled automatically by the platform -> Rekening Bank BCA
-                    isStillPaid = true
-                    shortfall = 0L
-                    changeDue = 0L
-                    effectivePaidAmount = newTotal
+                val paymentRecalc = if (media.isPlatform) {
+                    WaffleoOrderEngine.recalculateOrderPaymentStatus(newTotalAmount = newTotal, netPaidAmount = newTotal)
                 } else if (wasPaidBefore && previousPaid > 0L) {
-                    when {
-                        newTotal > previousPaid -> {
-                            // Total baru > uang yang sudah dibayar -> belum lunas, wajib bayar kekurangan!
-                            isStillPaid = false
-                            shortfall = newTotal - previousPaid
-                            changeDue = 0L
-                            effectivePaidAmount = previousPaid
-                        }
-                        newTotal < previousPaid -> {
-                            // Total baru < uang yang sudah dibayar -> lunas, kasir beri kembalian Cash!
-                            isStillPaid = true
-                            shortfall = 0L
-                            changeDue = previousPaid - newTotal
-                            effectivePaidAmount = newTotal
-                        }
-                        else -> {
-                            isStillPaid = true
-                            shortfall = 0L
-                            changeDue = 0L
-                            effectivePaidAmount = newTotal
-                        }
-                    }
+                    WaffleoOrderEngine.recalculateOrderPaymentStatus(newTotalAmount = newTotal, netPaidAmount = previousPaid)
                 } else {
-                    isStillPaid = false
-                    shortfall = 0L
-                    changeDue = 0L
-                    effectivePaidAmount = 0L
+                    WaffleoOrderEngine.recalculateOrderPaymentStatus(newTotalAmount = newTotal, netPaidAmount = 0L)
                 }
+
+                val isStillPaid = paymentRecalc.isPaid
+                val shortfall = paymentRecalc.shortfallAmount
+                val overpaid = paymentRecalc.overpaidAmount
+                val changeDue = overpaid
+                val effectivePaidAmount = if (media.isPlatform) newTotal else previousPaid
 
                 val isEditedBackdated = (_cartIsBackdated.value && _session.value.role.canInputBackdatedOrder) || isBackdatedOrder(currentEditing)
                 val effectiveBaseMs = if (_cartIsBackdated.value && _session.value.role.canInputBackdatedOrder) {
@@ -3191,7 +3357,6 @@ class WaffleoViewModel(
                 }
                 val timeline = currentEditing.getTimelineEvents().toMutableList()
 
-                // Bootstrap initial timeline & payment if empty
                 if (timeline.isEmpty()) {
                     timeline.add(
                         OrderTimelineEvent(
@@ -3202,7 +3367,7 @@ class WaffleoViewModel(
                             actorUsername = currentEditing.createdBy,
                             actorRole = "Staff",
                             title = "Pesanan Dibuat",
-                            description = "Pesanan ${currentEditing.orderNumber} masuk via ${currentEditing.orderMedia} (${currentEditing.customerData})."
+                            description = "Pesanan ${currentEditing.displayOrderNumber} masuk via ${currentEditing.orderMedia} (${currentEditing.customerData})."
                         )
                     )
                     if (currentEditing.paidAmount > 0L) {
@@ -3221,35 +3386,59 @@ class WaffleoViewModel(
                     }
                 }
 
-                val oldItems = CartLineItem.deserializeList(currentEditing.itemsPayload)
+                // Reconcile items: ✅ completed items locked at TOP, newly added items at BOTTOM, removed completed items moved to historicalProducedItemsPayload
+                val oldItems = CartLineItem.deserializeList(currentEditing.itemsPayload).map { oldItem ->
+                    if (currentEditing.effectiveProcessingStage == 2 || currentEditing.isPrepared) {
+                        oldItem.copy(
+                            fulfillmentState = "SELESAI_DIPROSES",
+                            completedUnitCount = if (oldItem.completedUnitCount > 0) oldItem.completedUnitCount else oldItem.qty,
+                            isCompletedLockedBadge = true
+                        )
+                    } else {
+                        oldItem
+                    }
+                }
+                val nextRevision = currentEditing.revisionCount + 1
+                val reconciledEdit = WaffleoOrderEngine.reconcileEditOrderItems(
+                    previousActiveItems = oldItems,
+                    previousHistoricalItems = currentEditing.parsedHistoricalProducedItems,
+                    editedCartItems = items,
+                    nextRevisionNumber = nextRevision
+                )
+                val orderedActiveItems = sortOrderLineItems(
+                    items = reconciledEdit.orderedActiveItems,
+                    separateNewRevisionAdditions = true
+                )
+                val reconciledPayloadJson = CartLineItem.serializeList(orderedActiveItems)
+                val historicalPayloadJson = CartLineItem.serializeList(reconciledEdit.updatedHistoricalProducedItems)
+                val reconciledSummaryText = orderedActiveItems.joinToString("\n") { item ->
+                    "${item.qty}x ${item.formattedTitle()} [${item.formattedCustomization()}]"
+                }
+
                 val deltaItems = mutableListOf<String>()
-                items.forEach { newItem ->
-                    val matchedOld = oldItems.firstOrNull { it.lineId == newItem.lineId || it.formattedTitle() == newItem.formattedTitle() }
-                    if (matchedOld == null) {
-                        deltaItems.add("+ ${newItem.qty}x ${newItem.formattedTitle()}")
-                    } else if (newItem.qty > matchedOld.qty) {
-                        val addedQty = newItem.qty - matchedOld.qty
-                        deltaItems.add("+ ${addedQty}x ${newItem.formattedTitle()}")
-                    } else if (newItem.formattedCustomization() != matchedOld.formattedCustomization()) {
-                        deltaItems.add("• ${newItem.qty}x ${newItem.formattedTitle()} [${newItem.formattedCustomization()}]")
+                orderedActiveItems.forEach { newItem ->
+                    if (newItem.addedInRevision == nextRevision && !newItem.isCompletedLockedBadge) {
+                        deltaItems.add("+ ${newItem.qty}x ${newItem.formattedTitle()} (Item Baru)")
+                    } else if (newItem.isCompletedLockedBadge) {
+                        deltaItems.add("✅ ${newItem.qty}x ${newItem.formattedTitle()} (Tetap / Sudah Selesai Diproses)")
                     }
                 }
                 val deltaSummary = if (deltaItems.isNotEmpty()) {
                     deltaItems.joinToString("\n")
                 } else {
-                    summaryText
+                    reconciledSummaryText
                 }
 
                 val editDesc = buildString {
-                    append("Perubahan pesanan dikonfirmasi oleh ${_session.value.username} (${_session.value.role.label}).\n")
+                    append("Perubahan pesanan (Revisi #$nextRevision) dikonfirmasi oleh ${_session.value.username} (${_session.value.role.label}).\n")
                     append("• Total Semula: ${formatIdr(currentEditing.totalAmount)} -> Total Baru: ${formatIdr(newTotal)}\n")
                     if (shortfall > 0L) {
-                        append("• Kurang Bayar: ${formatIdr(shortfall)} (Customer wajib melunasi kekurangan)\n")
+                        append("• Kurang Bayar (Shortfall): ${formatIdr(shortfall)} (Customer wajib melunasi kekurangan)\n")
                     }
-                    if (changeDue > 0L) {
-                        append("• Kembalian Tunai: ${formatIdr(changeDue)} (Wajib diserahkan ke customer)\n")
+                    if (overpaid > 0L) {
+                        append("• Lebih Bayar (Overpaid / Refund Required): ${formatIdr(overpaid)} (Wajib refund ke customer)\n")
                     }
-                    append("• Rincian Item Baru:\n$deltaSummary")
+                    append("• Rincian Item:\n$deltaSummary")
                 }
 
                 timeline.add(
@@ -3260,38 +3449,10 @@ class WaffleoViewModel(
                         eventType = "ORDER_EDITED",
                         actorUsername = _session.value.username,
                         actorRole = _session.value.role.label,
-                        title = "Perubahan Pesanan Dikonfirmasi",
+                        title = "Perubahan Pesanan Dikonfirmasi (Revisi #$nextRevision)",
                         description = editDesc
                     )
                 )
-
-                val incrementalChangeDue = (changeDue - currentEditing.changeDueAmount).coerceAtLeast(0L)
-                if (incrementalChangeDue > 0L) {
-                    ledger.add(
-                        OrderPaymentLedgerEntry(
-                            paymentId = "pay_${nowMs}_${UUID.randomUUID().toString().take(4)}",
-                            timestampMillis = nowMs,
-                            timeText = nowText,
-                            paymentType = "CHANGE_REFUND_RETURN",
-                            paymentMethod = "Tunai (Kembalian)",
-                            amount = incrementalChangeDue,
-                            cashierUsername = _session.value.username,
-                            note = "Pengembalian kembalian uang tunai ke customer akibat perubahan pesanan"
-                        )
-                    )
-                    timeline.add(
-                        OrderTimelineEvent(
-                            eventId = "evt_${nowMs + 1}_${UUID.randomUUID().toString().take(4)}",
-                            timestampMillis = nowMs + 1,
-                            timeText = nowText,
-                            eventType = "PAYMENT_EVENT",
-                            actorUsername = _session.value.username,
-                            actorRole = _session.value.role.label,
-                            title = "Kembalian Tunai Diserahkan",
-                            description = "Diserahkan kembalian uang tunai ${formatIdr(incrementalChangeDue)} kepada customer oleh ${_session.value.username}."
-                        )
-                    )
-                }
 
                 val resolvedEditMethod = when {
                     media.isPlatform -> media.defaultSettlementMethod
@@ -3307,8 +3468,8 @@ class WaffleoViewModel(
                 val updatedOrder = currentEditing.copy(
                     orderMedia = media.label,
                     customerData = fullCustomerData,
-                    itemsSummary = summaryText,
-                    itemsPayload = payloadJson,
+                    itemsSummary = reconciledSummaryText,
+                    itemsPayload = reconciledPayloadJson,
                     notes = _cartNotes.value.trim(),
                     promoCode = resolvedPromoCodeForOrder,
                     subtotalAmount = subtotal,
@@ -3317,8 +3478,14 @@ class WaffleoViewModel(
                     paidAmount = effectivePaidAmount,
                     paymentMethod = resolvedEditMethod,
                     isPaid = isStillPaid,
+                    isPrepared = reconciledEdit.nextIsPreparedFlag,
+                    processingStage = reconciledEdit.nextOrderProcessingStage,
+                    historicalProducedItemsPayload = historicalPayloadJson,
+                    revisionCount = nextRevision,
                     shortfallAmount = shortfall,
                     changeDueAmount = changeDue,
+                    overpaidAmount = overpaid,
+                    settlementStatus = paymentRecalc.settlementStatus,
                     splitCashAmount = editSplitCash,
                     splitQrisAmount = editSplitQris,
                     createdBy = _session.value.username,
@@ -3346,10 +3513,10 @@ class WaffleoViewModel(
                 syncOrderToCloud(updatedOrder, isNew = false)
                 logAuditEvent(
                     actionType = "ORDER_EDITED",
-                    entityId = updatedOrder.orderNumber,
-                    summary = "Edit pesanan ${updatedOrder.orderNumber}: Total lama ${formatIdr(currentEditing.totalAmount)} -> Total baru ${formatIdr(newTotal)} (Kurang Bayar: ${formatIdr(shortfall)}, Kembalian Tunai: ${formatIdr(changeDue)})",
+                    entityId = updatedOrder.displayOrderNumber,
+                    summary = "Edit pesanan ${updatedOrder.displayOrderNumber} (Revisi #$nextRevision): Total lama ${formatIdr(currentEditing.totalAmount)} -> Total baru ${formatIdr(newTotal)} (Kurang Bayar: ${formatIdr(shortfall)}, Lebih Bayar/Refund: ${formatIdr(overpaid)})",
                     beforeSnapshot = """{"total":${currentEditing.totalAmount},"paid":${currentEditing.paidAmount},"items":${JSONObject.quote(currentEditing.itemsSummary)}}""",
-                    afterSnapshot = """{"total":$newTotal,"paid":$effectivePaidAmount,"shortfall":$shortfall,"changeDue":$changeDue,"items":${JSONObject.quote(summaryText)}}""",
+                    afterSnapshot = """{"total":$newTotal,"paid":$effectivePaidAmount,"shortfall":$shortfall,"overpaid":$overpaid,"settlementStatus":"${paymentRecalc.settlementStatus}","items":${JSONObject.quote(reconciledSummaryText)}}""",
                     customTimestampMillis = nowMs
                 )
                 val ordDate = resolveOrderTimestampDate(updatedOrder)
@@ -3363,9 +3530,9 @@ class WaffleoViewModel(
                 }
 
                 val feedbackMsg = when {
-                    shortfall > 0L -> "Perubahan ${updatedOrder.orderNumber} disimpan. Status BELUM LUNAS: Customer wajib melunasi kekurangan ${formatIdr(shortfall)}."
-                    changeDue > 0L -> "Perubahan ${updatedOrder.orderNumber} disimpan. Berikan KEMBALIAN TUNAI ke Customer senilai ${formatIdr(changeDue)}."
-                    else -> "Perubahan pesanan ${updatedOrder.orderNumber} berhasil disimpan pada urutan semula."
+                    shortfall > 0L -> "Perubahan ${updatedOrder.displayOrderNumber} disimpan. Status BELUM LUNAS: Customer wajib melunasi kekurangan ${formatIdr(shortfall)}."
+                    overpaid > 0L -> "Perubahan ${updatedOrder.displayOrderNumber} disimpan. Status LEBIH BAYAR: Konfirmasi refund ${formatIdr(overpaid)} ke Customer."
+                    else -> "Perubahan pesanan ${updatedOrder.displayOrderNumber} berhasil disimpan pada urutan semula."
                 }
                 clearCart()
                 _currentDestination.value = MainNavDestination.ORDERS
@@ -3618,63 +3785,351 @@ class WaffleoViewModel(
     /**
      * One-way click: Prepare -> Prepared. Cannot be toggled back once Prepared!
      */
-    fun markOrderPreparedOneWay(order: OrderRecord) {
-        if (order.isPrepared) return
-        val actionKey = "prepare:${order.id}"
+    /**
+     * Phase 9: Confirms refund of an overpaid order after Edit Order reduced the total below what was already paid.
+     * Appends an OVERPAYMENT_REFUND entry to paymentLedgerPayload without deleting the initial payment entry.
+     */
+    fun confirmOrderOverpaymentRefund(order: OrderRecord, refundMethod: String = "Tunai (Cash)") {
+        if (order.overpaidAmount <= 0L) return
+        val actionKey = "refund_overpaid:${order.id}"
         if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
             try {
-            val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
-            if (latestOrder.isPrepared) return@launch
-            val nowMs = resolveOrderActionTimestampMillis(order)
-            val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
-            val timeline = order.getTimelineEvents().toMutableList()
+                val nowMs = resolveOrderActionTimestampMillis(order)
+                val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
+                val refundAmt = order.overpaidAmount
+                val ledger = order.getPaymentLedger().toMutableList()
+                val timeline = order.getTimelineEvents().toMutableList()
 
-            // Bootstrap initial creation event if empty
-            if (timeline.isEmpty()) {
-                timeline.add(
-                    OrderTimelineEvent(
-                        eventId = "evt_init_${order.id}",
-                        timestampMillis = nowMs - 600000,
-                        timeText = "Waktu Pembuatan Awal",
-                        eventType = "ORDER_CREATED",
-                        actorUsername = order.createdBy,
-                        actorRole = "Staff",
-                        title = "Pesanan Dibuat",
-                        description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData})."
+                ledger.add(
+                    OrderPaymentLedgerEntry(
+                        paymentId = "pay_${nowMs}_overpaid_refund_${UUID.randomUUID().toString().take(4)}",
+                        timestampMillis = nowMs,
+                        timeText = nowText,
+                        paymentType = "CHANGE_REFUND_RETURN",
+                        paymentMethod = refundMethod,
+                        amount = refundAmt,
+                        cashierUsername = _session.value.username,
+                        note = "Refund kelebihan bayar akibat revisi pesanan (${order.displayOrderNumber})"
                     )
                 )
-            }
-
-            timeline.add(
-                OrderTimelineEvent(
-                    eventId = "evt_${nowMs}_${UUID.randomUUID().toString().take(4)}",
-                    timestampMillis = nowMs,
-                    timeText = nowText,
-                    eventType = "ORDER_PREPARED",
-                    actorUsername = _session.value.username,
-                    actorRole = _session.value.role.label,
-                    title = "Pesanan Selesai Dimasak (Prepared)",
-                    description = "Seluruh item pesanan ${order.displayOrderNumber} selesai disiapkan di dapur oleh ${_session.value.username}."
+                timeline.add(
+                    OrderTimelineEvent(
+                        eventId = "evt_${nowMs}_overpaid_refund_${UUID.randomUUID().toString().take(4)}",
+                        timestampMillis = nowMs,
+                        timeText = nowText,
+                        eventType = "PAYMENT_EVENT",
+                        actorUsername = _session.value.username,
+                        actorRole = _session.value.role.label,
+                        title = "Refund Kelebihan Bayar Diserahkan",
+                        description = "Kelebihan bayar senilai ${formatIdr(refundAmt)} dikembalikan via $refundMethod oleh ${_session.value.username}."
+                    )
                 )
-            )
-            val updated = order.copy(
-                isPrepared = true,
-                orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
-                createdAt = order.createdAt ?: com.google.firebase.Timestamp(resolveOrderTimestampDate(order)),
-                updatedAt = com.google.firebase.Timestamp(Date(nowMs))
-            )
-            updateLocalOrderItem(updated)
-            syncOrderToCloud(updated, isNew = false)
-            logAuditEvent(
-                actionType = "ORDER_PREPARED",
-                entityId = order.displayOrderNumber,
-                summary = "Seluruh item pada pesanan ${order.displayOrderNumber} selesai dibuat (Prepared)",
-                beforeSnapshot = """{"isPrepared":false}""",
-                afterSnapshot = """{"isPrepared":true}""",
-                customTimestampMillis = nowMs
-            )
-            showBanner("Pesanan ${order.displayOrderNumber} telah selesai dibuat (Prepared).")
+                val updated = order.copy(
+                    paidAmount = order.totalAmount,
+                    overpaidAmount = 0L,
+                    changeDueAmount = 0L,
+                    settlementStatus = "PAID_EXACT",
+                    paymentLedgerPayload = OrderPaymentLedgerEntry.serializeList(ledger),
+                    orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
+                    updatedAt = com.google.firebase.Timestamp(Date(nowMs))
+                )
+                updateLocalOrderItem(updated)
+                syncOrderToCloud(updated, isNew = false)
+                logAuditEvent(
+                    actionType = "ORDER_OVERPAYMENT_REFUNDED",
+                    entityId = order.displayOrderNumber,
+                    summary = "Refund kelebihan bayar pesanan ${order.displayOrderNumber} senilai ${formatIdr(refundAmt)} via $refundMethod",
+                    beforeSnapshot = """{"paidAmount":${order.paidAmount},"overpaidAmount":$refundAmt,"settlementStatus":"${order.settlementStatus}"}""",
+                    afterSnapshot = """{"paidAmount":${order.totalAmount},"overpaidAmount":0,"settlementStatus":"PAID_EXACT"}""",
+                    customTimestampMillis = nowMs
+                )
+                showBanner("Refund kelebihan bayar ${formatIdr(refundAmt)} untuk ${order.displayOrderNumber} berhasil tercatat.")
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
+        }
+    }
+
+    /**
+     * 3-Stage Order Processing Button:
+     * - Stage 0 (BELUM_DIPROSES) -> Click 1 -> Stage 1 (SEDANG_DIPROSES, Yellow button)
+     * - Stage 1 (SEDANG_DIPROSES) -> Click 2 -> Stage 2 (SELESAI_DIPROSES, Green button + marks active items ✅)
+     */
+    /**
+     * Dynamic Multi-Stage Order Processing Button:
+     * Cycles dynamically on every click:
+     * - Stage 0 (Belum Diproses) -> Click -> Stage 1 (Sedang Diproses)
+     * - Stage 1 (Sedang Diproses) -> Click -> Stage 2 (Selesai Diproses, marks all items checked)
+     * - Stage 2 (Selesai Diproses) -> Click -> Stage 0 (Belum Diproses, unchecks items)
+     */
+    fun cycleOrderProcessingStage(order: OrderRecord) {
+        val actionKey = "cycle_stage:${order.id}"
+        if (!inFlightOrderActionIds.add(actionKey)) return
+        viewModelScope.launch {
+            try {
+                val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+                val currentStage = latestOrder.effectiveProcessingStage
+                val targetStage = when (currentStage) {
+                    0 -> 1
+                    1 -> 2
+                    else -> 0
+                }
+
+                val nowMs = resolveOrderActionTimestampMillis(latestOrder)
+                val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
+                val timeline = latestOrder.getTimelineEvents().toMutableList()
+
+                val rawItems = CartLineItem.deserializeList(latestOrder.itemsPayload)
+                val updatedItems = when (targetStage) {
+                    0 -> rawItems.map { item ->
+                        item.copy(
+                            fulfillmentState = "BELUM_DIPROSES",
+                            completedUnitCount = 0,
+                            isCompletedLockedBadge = false
+                        )
+                    }
+                    1 -> {
+                        // Sedang Diproses: pastikan ada unit yang aktif diceklis tapi tidak semua
+                        val currentlyAllZero = rawItems.all { it.completedUnitCount <= 0 }
+                        if (currentlyAllZero) {
+                            rawItems.mapIndexed { idx, item ->
+                                if (idx == 0) {
+                                    item.copy(
+                                        fulfillmentState = "SEDANG_DIPROSES",
+                                        completedUnitCount = 1.coerceAtMost(item.qty),
+                                        isCompletedLockedBadge = false
+                                    )
+                                } else {
+                                    item.copy(
+                                        fulfillmentState = "BELUM_DIPROSES",
+                                        completedUnitCount = 0,
+                                        isCompletedLockedBadge = false
+                                    )
+                                }
+                            }
+                        } else {
+                            // Jika sebelumnya dari stage 2 (semua selesai), uncheck 1 unit terakhir agar berstatus sebagian
+                            rawItems.mapIndexed { idx, item ->
+                                if (idx == rawItems.lastIndex) {
+                                    val uncheckOne = (item.qty - 1).coerceAtLeast(0)
+                                    item.copy(
+                                        fulfillmentState = if (uncheckOne > 0) "SEDANG_DIPROSES" else "BELUM_DIPROSES",
+                                        completedUnitCount = uncheckOne,
+                                        isCompletedLockedBadge = false
+                                    )
+                                } else {
+                                    item.copy(
+                                        fulfillmentState = if (item.completedUnitCount >= item.qty) "SELESAI_DIPROSES" else if (item.completedUnitCount > 0) "SEDANG_DIPROSES" else "BELUM_DIPROSES",
+                                        completedUnitCount = item.completedUnitCount.coerceIn(0, item.qty),
+                                        isCompletedLockedBadge = false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> rawItems.map { item ->
+                        item.copy(
+                            fulfillmentState = "SELESAI_DIPROSES",
+                            completedUnitCount = item.qty,
+                            isCompletedLockedBadge = true
+                        )
+                    }
+                }
+
+                val eventType = when (targetStage) {
+                    1 -> "ORDER_COOKING"
+                    2 -> "ORDER_PREPARED"
+                    else -> "ORDER_RESET_STAGE"
+                }
+                val eventTitle = when (targetStage) {
+                    1 -> "Pesanan Sedang Diproses"
+                    2 -> "Pesanan Selesai Diproses (Prepared)"
+                    else -> "Pesanan Belum Diproses (Direset)"
+                }
+                val eventDesc = when (targetStage) {
+                    1 -> "Pesanan ${latestOrder.displayOrderNumber} sedang disiapkan / dimasak di dapur oleh ${_session.value.username}."
+                    2 -> "Seluruh item pesanan ${latestOrder.displayOrderNumber} selesai diproses oleh ${_session.value.username}."
+                    else -> "Status proses pesanan ${latestOrder.displayOrderNumber} dikembalikan ke Belum Diproses oleh ${_session.value.username}."
+                }
+
+                timeline.add(
+                    OrderTimelineEvent(
+                        eventId = "evt_${nowMs}_stage_${UUID.randomUUID().toString().take(4)}",
+                        timestampMillis = nowMs,
+                        timeText = nowText,
+                        eventType = eventType,
+                        actorUsername = _session.value.username,
+                        actorRole = _session.value.role.label,
+                        title = eventTitle,
+                        description = eventDesc
+                    )
+                )
+
+                val updated = latestOrder.copy(
+                    processingStage = targetStage,
+                    isPrepared = (targetStage == 2),
+                    itemsPayload = CartLineItem.serializeList(updatedItems),
+                    orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
+                    createdAt = latestOrder.createdAt ?: com.google.firebase.Timestamp(resolveOrderTimestampDate(latestOrder)),
+                    updatedAt = com.google.firebase.Timestamp(Date(nowMs))
+                )
+
+                updateLocalOrderItem(updated)
+                syncOrderToCloud(updated, isNew = false)
+
+                val bannerMsg = when (targetStage) {
+                    1 -> "Pesanan ${latestOrder.displayOrderNumber}: Sedang Diproses."
+                    2 -> "Pesanan ${latestOrder.displayOrderNumber}: Selesai Diproses."
+                    else -> "Pesanan ${latestOrder.displayOrderNumber}: Belum Diproses."
+                }
+                showBanner(bannerMsg)
+            } finally {
+                inFlightOrderActionIds.remove(actionKey)
+            }
+        }
+    }
+
+    /**
+     * Backward-compatible alias for cycling stage.
+     */
+    fun advanceOrderProcessingStage(order: OrderRecord) {
+        cycleOrderProcessingStage(order)
+    }
+
+    /**
+     * Backward-compatible wrapper.
+     */
+    fun markOrderPreparedOneWay(order: OrderRecord) {
+        cycleOrderProcessingStage(order)
+    }
+
+    /**
+     * Format 2 Individual Item Unit Checklist:
+     * Supports both checking and unchecking individual item units.
+     * Automatically adjusts order processingStage dynamically:
+     * - If NO units are checked across the whole order -> Stage 0 (Belum Diproses)
+     * - If SOME units are checked -> Stage 1 (Sedang Diproses)
+     * - If ALL units across the entire order are checked -> Stage 2 (Selesai Diproses)
+     */
+    fun toggleOrderItemUnitChecked(order: OrderRecord, lineId: String, unitIndex: Int) {
+        val actionKey = "toggle_unit:${order.id}:$lineId:$unitIndex"
+        if (!inFlightOrderActionIds.add(actionKey)) return
+        viewModelScope.launch {
+            try {
+                val latestOrder = _localOrders.value.firstOrNull { it.id == order.id } ?: order
+                val items = CartLineItem.deserializeList(latestOrder.itemsPayload).toMutableList()
+                val targetIndex = items.indexOfFirst { it.lineId == lineId }
+                if (targetIndex < 0) return@launch
+
+                val item = items[targetIndex]
+                val currentCompleted = item.completedUnitCount.coerceIn(0, item.qty)
+
+                // Jika unit yang diklik sudah tercentang (unitIndex < currentCompleted), uncentang (mundurkan count)
+                // Jika unit yang diklik belum tercentang, centang sampai unitIndex + 1
+                val isCurrentlyChecked = unitIndex < currentCompleted || item.isCompletedLockedBadge || latestOrder.processingStage >= 2
+                val newCompleted = if (isCurrentlyChecked) {
+                    // Uncheck unit ini: jika unitIndex == 0, jadi 0; jika unitIndex > 0, set ke unitIndex
+                    unitIndex.coerceAtLeast(0)
+                } else {
+                    // Check unit ini: set ke unitIndex + 1
+                    (unitIndex + 1).coerceAtMost(item.qty)
+                }
+
+                val updatedFulfillment = when {
+                    newCompleted >= item.qty -> "SELESAI_DIPROSES"
+                    newCompleted > 0 -> "SEDANG_DIPROSES"
+                    else -> "BELUM_DIPROSES"
+                }
+
+                items[targetIndex] = item.copy(
+                    completedUnitCount = newCompleted,
+                    fulfillmentState = updatedFulfillment,
+                    isCompletedLockedBadge = false
+                )
+
+                // Clear isCompletedLockedBadge on all other items when adjusting unit checklists
+                for (i in items.indices) {
+                    if (i != targetIndex && items[i].isCompletedLockedBadge) {
+                        items[i] = items[i].copy(isCompletedLockedBadge = false)
+                    }
+                }
+
+                // Evaluasi status dinamis ke seluruh pesanan
+                val totalUnits = items.sumOf { it.qty }
+                val totalCheckedUnits = items.sumOf { it.completedUnitCount.coerceIn(0, it.qty) }
+
+                val nextStage = when {
+                    totalCheckedUnits == 0 -> 0 // Tidak ada item diceklis -> Belum Diproses
+                    totalCheckedUnits >= totalUnits -> 2 // Semua item diceklis -> Selesai Diproses
+                    else -> 1 // Sebagian diceklis -> Sedang Diproses
+                }
+
+                val isPrepared = (nextStage == 2)
+
+                // Jika status naik menjadi 2 (semua selesai), tandai locked badge
+                if (nextStage == 2) {
+                    for (i in items.indices) {
+                        items[i] = items[i].copy(
+                            completedUnitCount = items[i].qty,
+                            fulfillmentState = "SELESAI_DIPROSES",
+                            isCompletedLockedBadge = true
+                        )
+                    }
+                } else if (nextStage == 0) {
+                    for (i in items.indices) {
+                        items[i] = items[i].copy(
+                            completedUnitCount = 0,
+                            fulfillmentState = "BELUM_DIPROSES",
+                            isCompletedLockedBadge = false
+                        )
+                    }
+                }
+
+                val timeline = latestOrder.getTimelineEvents().toMutableList()
+                val nowMs = resolveOrderActionTimestampMillis(latestOrder)
+                val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
+
+                if (nextStage != latestOrder.processingStage) {
+                    val eventType = when (nextStage) {
+                        2 -> "ORDER_PREPARED"
+                        1 -> "ORDER_COOKING"
+                        else -> "ORDER_RESET_STAGE"
+                    }
+                    val eventTitle = when (nextStage) {
+                        2 -> "Pesanan Selesai Diproses"
+                        1 -> "Pesanan Sedang Diproses"
+                        else -> "Pesanan Belum Diproses"
+                    }
+                    val eventDesc = when (nextStage) {
+                        2 -> "Seluruh item pesanan ${latestOrder.displayOrderNumber} telah diceklis lengkap."
+                        1 -> "Item pesanan ${latestOrder.displayOrderNumber} mulai diceklis / diproses di dapur."
+                        else -> "Seluruh ceklis item pesanan ${latestOrder.displayOrderNumber} di-uncentang."
+                    }
+                    timeline.add(
+                        OrderTimelineEvent(
+                            eventId = "evt_${nowMs}_chk_stage_${UUID.randomUUID().toString().take(4)}",
+                            timestampMillis = nowMs,
+                            timeText = nowText,
+                            eventType = eventType,
+                            actorUsername = _session.value.username,
+                            actorRole = _session.value.role.label,
+                            title = eventTitle,
+                            description = eventDesc
+                        )
+                    )
+                }
+
+                val updated = latestOrder.copy(
+                    processingStage = nextStage,
+                    isPrepared = isPrepared,
+                    itemsPayload = CartLineItem.serializeList(items),
+                    orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
+                    updatedAt = com.google.firebase.Timestamp(Date(nowMs))
+                )
+
+                updateLocalOrderItem(updated)
+                syncOrderToCloud(updated, isNew = false)
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3683,13 +4138,16 @@ class WaffleoViewModel(
 
     /**
      * Done! button:
-     * 1. Strictly requires order.isPaid && order.isPrepared.
+     * 1. Strictly requires order.isPaid && (order.isPrepared || order.effectiveProcessingStage == 2) && order.overpaidAmount == 0L.
      * 2. Moves order to Order History (status = "DONE").
-     * 3. Deducts raw material stocks ONLY at this exact moment.
      */
-    fun completeOrderAndDeductStock(order: OrderRecord) {
-        if (!order.isPaid || !order.isPrepared) {
-            showBanner("Pesanan harus berstatus Paid dan Prepared sebelum tombol Done! dapat ditekan.")
+    fun completeOrder(order: OrderRecord) {
+        if (!order.isPaid || (!order.isPrepared && order.effectiveProcessingStage < 2)) {
+            showBanner("Pesanan harus berstatus Paid dan Selesai Diproses sebelum tombol Done! dapat ditekan.")
+            return
+        }
+        if (order.overpaidAmount > 0L) {
+            showBanner("Selesaikan konfirmasi Refund Kelebihan Bayar (${formatIdr(order.overpaidAmount)}) terlebih dahulu.")
             return
         }
         val actionKey = "done:${order.id}"
@@ -3702,7 +4160,6 @@ class WaffleoViewModel(
             val nowText = SimpleDateFormat("dd MMMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date(nowMs))
             val timeline = order.getTimelineEvents().toMutableList()
 
-            // Bootstrap initial creation event if empty
             if (timeline.isEmpty()) {
                 timeline.add(
                     OrderTimelineEvent(
@@ -3715,6 +4172,15 @@ class WaffleoViewModel(
                         title = "Pesanan Dibuat",
                         description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData})."
                     )
+                )
+            }
+
+            val rawItems = CartLineItem.deserializeList(order.itemsPayload)
+            val finalizedItems = rawItems.map { item ->
+                item.copy(
+                    fulfillmentState = "SELESAI_DIPROSES",
+                    completedUnitCount = item.qty,
+                    isCompletedLockedBadge = true
                 )
             }
 
@@ -3732,8 +4198,13 @@ class WaffleoViewModel(
             )
             val updatedOrder = order.copy(
                 status = "DONE",
+                processingStage = 2,
+                isPrepared = true,
+                itemsPayload = CartLineItem.serializeList(finalizedItems),
                 shortfallAmount = 0L,
                 changeDueAmount = 0L,
+                overpaidAmount = 0L,
+                settlementStatus = "PAID_EXACT",
                 orderTimelinePayload = OrderTimelineEvent.serializeList(timeline),
                 createdAt = order.createdAt ?: com.google.firebase.Timestamp(resolveOrderTimestampDate(order)),
                 updatedAt = com.google.firebase.Timestamp(Date(nowMs))
@@ -3741,28 +4212,8 @@ class WaffleoViewModel(
             updateLocalOrderItem(updatedOrder)
             syncOrderToCloud(updatedOrder, isNew = false)
 
-            // Calculate ingredient usage from order line items
-            val lineItems = CartLineItem.deserializeList(order.itemsPayload)
-            val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
-            val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
-
-            val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
-            val deductedDetails = mutableListOf<String>()
-
-            currentIngredients.forEach { ing ->
-                val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
-                val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
-                val perDrink = meta.optDouble("usagePerDrink", 0.0)
-                val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
-                if (usedQty > 0.0) {
-                    val newStock = (ing.stockQty - usedQty).coerceAtLeast(0.0)
-                    adjustIngredientStock(ing, -usedQty, newStock)
-                    deductedDetails.add("${ing.name}: -${usedQty.toInt()} ${ing.stockUnit} (Sisa: ${newStock.toInt()} ${ing.stockUnit})")
-                }
-            }
-
             logAuditEvent(
-                actionType = "ORDER_DONE_STOCK_DEDUCTED",
+                actionType = "ORDER_DONE",
                 entityId = order.displayOrderNumber,
                 summary = "Pesanan ${order.displayOrderNumber} SELESAI (Done!) & diserahkan ke customer.",
                 beforeSnapshot = """{"status":"ACTIVE"}""",
@@ -3770,7 +4221,6 @@ class WaffleoViewModel(
                 customTimestampMillis = nowMs
             )
 
-            // Immediately sync backdated orders (or any date that already has POS sync in Money Manager) to Money Manager under the order's date & time
             val ordDate = resolveOrderTimestampDate(updatedOrder)
             val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
             val ordTimeText = SimpleDateFormat("HH:mm", Locale.US).format(ordDate)
@@ -3792,7 +4242,13 @@ class WaffleoViewModel(
         }
     }
 
-    fun cancelOrderWithReason(order: OrderRecord, reason: String) {
+    /**
+     * Cancel Order with mandatory reason.
+     */
+    fun cancelOrderWithReason(
+        order: OrderRecord,
+        reason: String
+    ) {
         val actionKey = "cancel:${order.id}"
         if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
@@ -3804,7 +4260,6 @@ class WaffleoViewModel(
             val actorInfo = "${_session.value.username} (${_session.value.role.label})"
             val timeline = order.getTimelineEvents().toMutableList()
 
-            // Bootstrap initial creation event if empty
             if (timeline.isEmpty()) {
                 timeline.add(
                     OrderTimelineEvent(
@@ -3815,7 +4270,7 @@ class WaffleoViewModel(
                         actorUsername = order.createdBy,
                         actorRole = "Staff",
                         title = "Pesanan Dibuat",
-                        description = "Pesanan ${order.orderNumber} masuk via ${order.orderMedia} (${order.customerData})."
+                        description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData})."
                     )
                 )
             }
@@ -3833,7 +4288,7 @@ class WaffleoViewModel(
                 )
             )
 
-            if (order.isPaid && order.totalAmount > 0L) {
+            if (order.isPaid && order.paidAmount > 0L) {
                 timeline.add(
                     OrderTimelineEvent(
                         eventId = "evt_${nowMs + 1}_refund_${UUID.randomUUID().toString().take(4)}",
@@ -3843,7 +4298,7 @@ class WaffleoViewModel(
                         actorUsername = _session.value.username,
                         actorRole = _session.value.role.label,
                         title = "Pengembalian Dana (Refund)",
-                        description = "Pengembalian dana senilai ${formatIdr(order.totalAmount)} dalam bentuk Tunai (Cash)."
+                        description = "Pengembalian dana senilai ${formatIdr(order.paidAmount)} dalam bentuk Tunai (Cash)."
                     )
                 )
             }
@@ -3858,14 +4313,13 @@ class WaffleoViewModel(
             )
             updateLocalOrderItem(updated)
             syncOrderToCloud(updated, isNew = false)
-            // Restore promo quota if order had a promo applied
             if (order.status != "CANCELLED" && order.status != "ERASED" && order.discountAmount > 0L && order.promoCode.isNotBlank()) {
                 restorePromoQuotaForOrder(order)
             }
             logAuditEvent(
                 actionType = "ORDER_CANCELLED",
                 entityId = order.displayOrderNumber,
-                summary = "Pesanan ${order.displayOrderNumber} DIBATALKAN oleh $actorInfo pada $nowText. Alasan: $reason (Stok bahan tidak dikurangi)",
+                summary = "Pesanan ${order.displayOrderNumber} DIBATALKAN oleh $actorInfo pada $nowText. Alasan: $reason",
                 beforeSnapshot = """{"status":"ACTIVE","total":${order.totalAmount}}""",
                 afterSnapshot = """{"status":"CANCELLED","reason":${JSONObject.quote(reason)},"cancelledBy":${JSONObject.quote(actorInfo)},"cancelledAt":"$nowText"}""",
                 customTimestampMillis = nowMs
@@ -3878,7 +4332,7 @@ class WaffleoViewModel(
             if (isBackdatedOrder(updated) || hasExistingDateSync) {
                 syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
             }
-            showBanner("Pesanan ${order.displayOrderNumber} dibatalkan dan dipindahkan ke Riwayat Dibatalkan.")
+            showBanner("Pesanan ${order.displayOrderNumber} dibatalkan.")
             } finally {
                 inFlightOrderActionIds.remove(actionKey)
             }
@@ -3889,9 +4343,8 @@ class WaffleoViewModel(
      * OWNER-ONLY ORDER ERASURE (ERASED STATUS):
      * Completely removes the order from active sales/recap metrics as if it never existed:
      * 1. Transitions status to 'ERASED' and preserves full audit timeline in 'Erased - Dihapus' tab.
-     * 2. Restores raw material stock if the order was previously completed ('DONE').
-     * 3. Re-synchronizes Money Manager daily POS transactions for the order's date.
-     * 4. Appends a rich, detailed AUDIT LOG entry capturing pre/post snapshots and restored amounts.
+     * 2. Re-synchronizes Money Manager daily POS transactions for the order's date.
+     * 3. Appends a rich, detailed AUDIT LOG entry capturing pre/post snapshots.
      */
     fun eraseOrderAndRevertMetrics(order: OrderRecord, reason: String = "Dihapus oleh Owner") {
         if (_session.value.role != StaffRole.OWNER && _session.value.role != StaffRole.DEVELOPER) {
@@ -3924,28 +4377,7 @@ class WaffleoViewModel(
                 )
             )
 
-            // 2. Restore ingredient stocks IF order was previously completed (DONE)
-            val restoredIngredients = mutableListOf<String>()
-            if (order.status == "DONE") {
-                val lineItems = CartLineItem.deserializeList(order.itemsPayload)
-                val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
-                val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
-
-                val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
-                currentIngredients.forEach { ing ->
-                    val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
-                    val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
-                    val perDrink = meta.optDouble("usagePerDrink", 0.0)
-                    val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
-                    if (usedQty > 0.0) {
-                        val restoredStock = ing.stockQty + usedQty
-                        adjustIngredientStock(ing, usedQty, restoredStock)
-                        restoredIngredients.add("${ing.name}: +${usedQty.toInt()} ${ing.stockUnit} (Total: ${restoredStock.toInt()} ${ing.stockUnit})")
-                    }
-                }
-            }
-
-            // 3. Mark Order as ERASED with preserved details
+            // 2. Mark Order as ERASED with preserved details
             val erasedOrder = order.copy(
                 status = "ERASED",
                 cancelReason = reason,
@@ -3962,18 +4394,17 @@ class WaffleoViewModel(
                 restorePromoQuotaForOrder(order)
             }
 
-            // 4. Log comprehensive Audit Trail
-            val restoredStockText = if (restoredIngredients.isNotEmpty()) " • Stok dipulihkan: ${restoredIngredients.joinToString(", ")}" else ""
+            // 3. Log comprehensive Audit Trail
             logAuditEvent(
                 actionType = "ORDER_ERASED",
                 entityId = order.displayOrderNumber,
-                summary = "Pesanan ${order.displayOrderNumber} senilai ${formatIdr(order.totalAmount)} DIHAPUS oleh $actorInfo. Data keuangan & penjualan disinkronkan kembali$restoredStockText.",
+                summary = "Pesanan ${order.displayOrderNumber} senilai ${formatIdr(order.totalAmount)} DIHAPUS oleh $actorInfo. Data keuangan & penjualan disinkronkan kembali.",
                 beforeSnapshot = """{"status":"${order.status}","totalAmount":${order.totalAmount},"paidAmount":${order.paidAmount},"isPaid":${order.isPaid},"itemsSummary":${JSONObject.quote(order.itemsSummary)}}""",
-                afterSnapshot = """{"status":"ERASED","erasedBy":${JSONObject.quote(actorInfo)},"erasedAt":"$nowText","reason":${JSONObject.quote(reason)},"restoredIngredients":${JSONObject.quote(restoredIngredients.joinToString("; "))}}""",
+                afterSnapshot = """{"status":"ERASED","erasedBy":${JSONObject.quote(actorInfo)},"erasedAt":"$nowText","reason":${JSONObject.quote(reason)}}""",
                 customTimestampMillis = nowMs
             )
 
-            // 5. Re-synchronize Money Manager for this order's dateKey so daily sales & cash flow reflect the deduction
+            // 4. Re-synchronize Money Manager for this order's dateKey so daily sales & cash flow reflect the deduction
             val ordDate = resolveOrderTimestampDate(order)
             val ordDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(ordDate)
             syncPosSalesForDateKey(targetDateKey = ordDateKey, silent = true)
@@ -3994,21 +4425,6 @@ class WaffleoViewModel(
         if (!inFlightOrderActionIds.add(actionKey)) return
         viewModelScope.launch {
             try {
-                if (order.status == "DONE") {
-                    val lineItems = CartLineItem.deserializeList(order.itemsPayload)
-                    val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
-                    val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
-                    val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }
-                    currentIngredients.forEach { ing ->
-                        val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
-                        val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
-                        val perDrink = meta.optDouble("usagePerDrink", 0.0)
-                        val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
-                        if (usedQty > 0.0) {
-                            adjustIngredientStock(ing, usedQty, ing.stockQty + usedQty)
-                        }
-                    }
-                }
                 if (order.status != "CANCELLED" && order.status != "ERASED" && order.discountAmount > 0L && order.promoCode.isNotBlank()) {
                     restorePromoQuotaForOrder(order)
                 }
@@ -4132,8 +4548,8 @@ class WaffleoViewModel(
                 actionType = "CATALOG_UPDATED",
                 entityId = finalRecord.id,
                 summary = actionDescription,
-                beforeSnapshot = existing?.let { """{"name":"${it.name}","walkIn":${it.priceWalkIn},"stock":${it.stockQty},"active":${it.isActive}}""" } ?: "{}",
-                afterSnapshot = """{"name":"${finalRecord.name}","walkIn":${finalRecord.priceWalkIn},"stock":${finalRecord.stockQty},"active":${finalRecord.isActive}}"""
+                beforeSnapshot = existing?.let { """{"name":"${it.name}","walkIn":${it.priceWalkIn},"active":${it.isActive}}""" } ?: "{}",
+                afterSnapshot = """{"name":"${finalRecord.name}","walkIn":${finalRecord.priceWalkIn},"active":${finalRecord.isActive}}"""
             )
             showBanner(actionDescription)
         }
@@ -4909,6 +5325,19 @@ class WaffleoViewModel(
         showBanner("Sub-kategori '$trimmedSub' berhasil dihapus dari '$trimmedCat'.")
     }
 
+    fun sortOrderLineItems(
+        items: List<CartLineItem>,
+        separateNewRevisionAdditions: Boolean = false
+    ): List<CartLineItem> {
+        return WaffleoOrderEngine.sortCartLineItems(
+            items = items,
+            catalog = catalogRecords.value,
+            menuCategories = _customMenuCategories.value,
+            modifierCategories = _customModifierCategories.value,
+            separateNewRevisionAdditions = separateNewRevisionAdditions
+        )
+    }
+
     fun addCustomMenuItemToCart(
         menuItem: CatalogRecord,
         selectedModifiers: List<String>,
@@ -4924,11 +5353,16 @@ class WaffleoViewModel(
         }
         val addQty = qty.coerceAtLeast(1)
         val currentList = _cartItems.value.toMutableList()
-        val sortedMods = selectedModifiers.sorted()
+        val sortedMods = WaffleoOrderEngine.sortModifierNamesBySettings(
+            modifierNames = selectedModifiers,
+            catalog = catalogRecords.value,
+            modifierCategories = _customModifierCategories.value
+        )
+        val normalizedModSet = sortedMods.map { it.lowercase().trim() }.sorted()
         val existingIdx = currentList.indexOfFirst {
             it.category == menuItem.category &&
                 it.primaryItemId == menuItem.id &&
-                it.addOnNames == sortedMods
+                it.addOnNames.map { m -> m.lowercase().trim() }.sorted() == normalizedModSet
         }
 
         if (existingIdx >= 0) {
@@ -5116,17 +5550,31 @@ class WaffleoViewModel(
         )
     }
 
-    fun getMoneyNoteSuggestions(prefix: String): List<String> {
+    fun getMoneyNoteSuggestions(
+        prefix: String,
+        categoryName: String = "",
+        subCategoryName: String = ""
+    ): List<String> {
         val cleanPrefix = prefix.trim()
         if (cleanPrefix.isEmpty()) return emptyList()
         val branch = _session.value.branchId
-        val fromTx = _allMoneyTransactions.value
+        val branchTxs = _allMoneyTransactions.value
             .filter { it.branchId.equals(branch, ignoreCase = true) && it.note.isNotBlank() }
-            .map { it.note.trim() }
+
+        val matchingSubCatNotes = if (categoryName.isNotBlank() || subCategoryName.isNotBlank()) {
+            branchTxs.filter {
+                (categoryName.isBlank() || it.categoryName.equals(categoryName, ignoreCase = true)) &&
+                    (subCategoryName.isBlank() || it.subCategoryName.equals(subCategoryName, ignoreCase = true))
+            }.map { it.note.trim() }
+        } else {
+            emptyList()
+        }
+
+        val fromTx = branchTxs.map { it.note.trim() }
         val fromBookmarks = _allMoneyBookmarks.value
             .filter { it.branchId.equals(branch, ignoreCase = true) && it.note.isNotBlank() }
             .map { it.note.trim() }
-        return (fromTx + fromBookmarks)
+        return (matchingSubCatNotes + fromTx + fromBookmarks)
             .distinct()
             .filter { it.startsWith(cleanPrefix, ignoreCase = true) && !it.equals(cleanPrefix, ignoreCase = true) }
             .take(8)
@@ -5529,36 +5977,7 @@ class WaffleoViewModel(
             acc.addItemCounts(ord)
         }
 
-        // Post-processing for Cash (Penjualan Tunai):
-        // Combine items & order count from Cash AND QRIS orders for the same dateKey
-        val dateKeys = grouped.keys.map { it.dateKey }.distinct()
-        val cashSummaryByDate = mutableMapOf<String, Pair<String, Int>>()
-
-        dateKeys.forEach { dKey ->
-            val cashAndQrisOrders = eligibleOrders.filter { ord ->
-                val oDate = dateFmt.format(resolveOrderTimestampDate(ord))
-                if (oDate != dKey) return@filter false
-                val isQris = ord.paymentMethod.contains("QRIS", ignoreCase = true)
-                val isCash = ord.paymentMethod.contains("Cash", ignoreCase = true) ||
-                    ord.paymentMethod.contains("Tunai", ignoreCase = true)
-                val isOnline = ord.orderMedia in listOf("Grabfood", "Gofood", "Shopeefood")
-                (isQris || isCash) && !isOnline
-            }
-            if (cashAndQrisOrders.isNotEmpty()) {
-                val combinedAcc = PosChannelAccumulator()
-                cashAndQrisOrders.forEach {
-                    combinedAcc.addItemCounts(it)
-                }
-                cashSummaryByDate[dKey] = Pair(combinedAcc.buildSummaryString(), cashAndQrisOrders.size)
-            }
-        }
-
         return grouped.map { (key, acc) ->
-            val isCashChannel = key.subCategoryName.equals("Cash", ignoreCase = true)
-            val combinedInfo = if (isCashChannel) cashSummaryByDate[key.dateKey] else null
-            val finalSummary = combinedInfo?.first ?: acc.buildSummaryString()
-            val finalOrderCount = combinedInfo?.second ?: acc.orderCount
-
             DailyChannelRecapItem(
                 dateKey = key.dateKey,
                 subCategory = key.subCategoryName,
@@ -5567,8 +5986,8 @@ class WaffleoViewModel(
                 grossAmount = acc.grossTotal,
                 platformDeduction = acc.feeTotal,
                 netAmount = acc.netTotal,
-                orderCount = finalOrderCount,
-                customItemSummary = finalSummary
+                orderCount = acc.orderCount,
+                customItemSummary = acc.buildSummaryString()
             )
         }
     }
@@ -5640,7 +6059,7 @@ class WaffleoViewModel(
         val targetAcc = accountName.lowercase().trim()
 
         val subMatch = when (targetSub) {
-            "cash" -> txSub == "cash" || txNote.contains("penjualan tunai") || txNote.contains("cash") || txAcc == "cash"
+            "cash" -> (txSub == "cash" || txNote.contains("penjualan tunai") || (txNote.contains("cash") && !txNote.contains("qris"))) && txSub != "qris" && !txNote.contains("qris")
             "qris" -> txSub == "qris" || txNote.contains("qris")
             "transfer tunai" -> txSub.contains("transfer") || txNote.contains("transfer")
             "grabfood" -> txSub == "grabfood" || txNote.contains("grabfood")
@@ -5793,13 +6212,12 @@ class WaffleoViewModel(
     fun syncPosSalesToMoneyManager(silent: Boolean = false, triggeredByStoreClose: Boolean = false) {
         val activeBranch = _session.value.branchId
 
-        // When closing the store, finalize any paid & prepared ACTIVE non-backdated orders into DONE synchronously and deduct stock so the daily shift queue is cleanly settled
+        // When closing the store, finalize any paid & prepared ACTIVE non-backdated orders into DONE synchronously so the daily shift queue is cleanly settled
         if (triggeredByStoreClose) {
             val activePaidPreparedOrders = orders.value.filter {
                 it.status == "ACTIVE" && it.isPaid && it.isPrepared && !isBackdatedOrder(it)
             }
             if (activePaidPreparedOrders.isNotEmpty()) {
-                val currentIngredients = catalogRecords.value.filter { it.recordType == "INGREDIENT" }.toMutableList()
                 activePaidPreparedOrders.forEach { ord ->
                     val finalized = ord.copy(
                         isPrepared = true,
@@ -5809,23 +6227,6 @@ class WaffleoViewModel(
                     )
                     updateLocalOrderItem(finalized)
                     syncOrderToCloud(finalized, isNew = false)
-
-                    val lineItems = CartLineItem.deserializeList(ord.itemsPayload)
-                    val totalWaffles = lineItems.filter { it.category == "Egg Waffle" }.sumOf { it.qty }
-                    val totalDrinks = lineItems.filter { it.category == "Drinks" }.sumOf { it.qty }
-                    for (idx in currentIngredients.indices) {
-                        val ing = currentIngredients[idx]
-                        val meta = try { JSONObject(ing.metadataJson) } catch (e: Exception) { JSONObject() }
-                        val perWaffle = meta.optDouble("usagePerWaffle", 0.0)
-                        val perDrink = meta.optDouble("usagePerDrink", 0.0)
-                        val usedQty = (totalWaffles * perWaffle) + (totalDrinks * perDrink)
-                        if (usedQty > 0.0) {
-                            val newStock = (ing.stockQty - usedQty).coerceAtLeast(0.0)
-                            val updatedIng = ing.copy(stockQty = newStock)
-                            currentIngredients[idx] = updatedIng
-                            adjustIngredientStock(ing, -usedQty, newStock)
-                        }
-                    }
                 }
             }
         }
@@ -6098,21 +6499,6 @@ class WaffleoViewModel(
         }
     }
 
-    private fun adjustIngredientStock(ing: CatalogRecord, deltaQty: Double, updatedStockQty: Double) {
-        val updatedIng = ing.copy(stockQty = updatedStockQty)
-        updateLocalSeedCatalogItem(updatedIng)
-        if ((_isMaintenanceModeOn.value && isDeveloperSession()) || isBranchDeleted(updatedIng.branchId)) return
-        val key = "catalog:${updatedIng.id}"
-        clearPendingSyncKey("catalog_delete:${updatedIng.id}")
-        markPendingSyncKey(key)
-        if (!isCloudAuthenticated || !isNetworkOnline.value) return
-        viewModelScope.launch {
-            val atomicOk = repository.adjustCatalogStockAtomic(workspaceId, updatedIng.id, deltaQty)
-            val ok = if (atomicOk) true else repository.saveCatalogItem(workspaceId, updatedIng.copy(userId = workspaceId))
-            if (ok) clearPendingSyncKey(key)
-        }
-    }
-
     private fun updateLocalOrderItem(updated: OrderRecord) {
         val current = _localOrders.value.toMutableList()
         val idx = current.indexOfFirst { it.id == updated.id }
@@ -6313,6 +6699,20 @@ class WaffleoViewModel(
                 put("customSubCategories", subCatObj)
 
                 put("transferFeeAccountChoice", _transferFeeAccountChoice.value)
+
+                val expSubCatArr = JSONArray()
+                _expenseSubCategoryConfigs.value.values.forEach { cfg ->
+                    expSubCatArr.put(
+                        JSONObject().apply {
+                            put("categoryName", cfg.categoryName)
+                            put("subCategoryName", cfg.subCategoryName)
+                            put("noteMode", cfg.noteMode.code)
+                            put("isUnitDescriptionEnabled", cfg.isUnitDescriptionEnabled)
+                            put("unitSymbol", cfg.unitSymbol)
+                        }
+                    )
+                }
+                put("expenseSubCategoryConfigs", expSubCatArr)
 
                 val recappedArr = JSONArray()
                 _recappedOrderIds.value.toList().takeLast(500).forEach { recappedArr.put(it) }
@@ -6525,6 +6925,30 @@ class WaffleoViewModel(
                 localStore?.saveTransferFeeAccountChoice(feeChoice)
             }
 
+            obj.optJSONArray("expenseSubCategoryConfigs")?.let { arr ->
+                val merged = _expenseSubCategoryConfigs.value.toMutableMap()
+                for (i in 0 until arr.length()) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val cat = item.optString("categoryName", "").trim()
+                    val sub = item.optString("subCategoryName", "").trim()
+                    if (cat.isEmpty() && sub.isEmpty()) continue
+                    val cfg = ExpenseSubCategoryInputConfig(
+                        categoryName = cat,
+                        subCategoryName = sub,
+                        noteMode = ExpenseNoteMode.fromCode(item.optString("noteMode", "NOTE")),
+                        isUnitDescriptionEnabled = item.optBoolean("isUnitDescriptionEnabled", false),
+                        unitSymbol = item.optString("unitSymbol", "kg").ifBlank { "kg" }
+                    )
+                    if (cfg.configKey !in merged) {
+                        merged[cfg.configKey] = cfg
+                    }
+                }
+                if (merged != _expenseSubCategoryConfigs.value) {
+                    _expenseSubCategoryConfigs.value = merged
+                    localStore?.saveExpenseSubCategoryConfigs(merged)
+                }
+            }
+
             obj.optJSONArray("recappedOrderIds")?.let { arr ->
                 val set = _recappedOrderIds.value.toMutableSet()
                 for (i in 0 until arr.length()) {
@@ -6611,9 +7035,6 @@ class WaffleoViewModel(
                         put("priceGrabFood", rec.priceGrabFood)
                         put("priceGoFood", rec.priceGoFood)
                         put("priceShopeeFood", rec.priceShopeeFood)
-                        put("stockQty", rec.stockQty)
-                        put("stockUnit", rec.stockUnit)
-                        put("costPerUnit", rec.costPerUnit)
                         put("isActive", rec.isActive)
                     }
                 )
@@ -6672,6 +7093,36 @@ class WaffleoViewModel(
 
     companion object {
         const val LOCAL_PREVIEW_USER_ID = WaffleoRepository.SHARED_WORKSPACE_ID
+
+        fun shouldResetSessionUiPreferences(
+            prev: ActivePosSession,
+            next: ActivePosSession
+        ): Boolean {
+            return prev.isLoggedIn != next.isLoggedIn ||
+                !prev.branchId.equals(next.branchId, ignoreCase = true) ||
+                prev.isInDeveloperPortal != next.isInDeveloperPortal ||
+                !prev.username.equals(next.username, ignoreCase = true)
+        }
+
+        fun resolveMoneyDateHeaderInitialTime(
+            lastTimesByDate: Map<String, String>,
+            dateKey: String,
+            nowTimeText: String = SimpleDateFormat("HH:mm", Locale.US).format(Date())
+        ): String {
+            return lastTimesByDate[dateKey]?.takeIf { it.isNotBlank() } ?: nowTimeText
+        }
+
+        fun recordMoneyDateHeaderLastTime(
+            lastTimesByDate: Map<String, String>,
+            dateKey: String,
+            timeText: String
+        ): Map<String, String> {
+            val cleanDate = dateKey.trim()
+            val cleanTime = timeText.trim()
+            if (cleanDate.isEmpty() || cleanTime.isEmpty()) return lastTimesByDate
+            return lastTimesByDate + (cleanDate to cleanTime)
+        }
+
         fun formatIdr(amount: Long): String {
             val format = NumberFormat.getNumberInstance(Locale.forLanguageTag("id-ID"))
             return "Rp ${format.format(amount)}"
@@ -6820,6 +7271,49 @@ class WaffleoViewModel(
 
         fun isSameBranch(b1: String?, b2: String?): Boolean {
             return normalizeBranchKey(b1) == normalizeBranchKey(b2)
+        }
+
+        fun resolveExpenseSubCategoryConfigFromState(
+            categoryName: String,
+            subCategoryName: String,
+            savedConfigs: Map<String, ExpenseSubCategoryInputConfig>,
+            transactions: List<MoneyTransactionRecord>
+        ): ExpenseSubCategoryInputConfig? {
+            val cleanCat = categoryName.trim()
+            val cleanSub = subCategoryName.trim()
+            if (cleanCat.isEmpty() && cleanSub.isEmpty()) return null
+
+            val key = ExpenseSubCategoryInputConfig.buildKey(cleanCat, cleanSub)
+            savedConfigs[key]?.let { return it }
+
+            // Fallback: inspect the most recent historical EXPENSE transaction for this Category + SubCategory
+            val lastMatchingTx = transactions.firstOrNull { tx ->
+                tx.type == MoneyTransactionType.EXPENSE &&
+                    tx.categoryName.trim().equals(cleanCat, ignoreCase = true) &&
+                    tx.subCategoryName.trim().equals(cleanSub, ignoreCase = true)
+            } ?: return null
+
+            val parsedQtyUnit = parseQuantityAndUnitFromDescription(lastMatchingTx.description)
+            val hasDistinctBrandNote = lastMatchingTx.note.isNotBlank() &&
+                !lastMatchingTx.note.trim().equals(cleanSub, ignoreCase = true)
+            val isIngredientCategory = cleanCat.contains("Bahan", ignoreCase = true) ||
+                cleanCat.contains("Topping", ignoreCase = true) ||
+                cleanCat.contains("Kemasan", ignoreCase = true) ||
+                cleanCat.contains("Packaging", ignoreCase = true)
+
+            val inferredNoteMode = if (hasDistinctBrandNote && (parsedQtyUnit != null || isIngredientCategory)) {
+                ExpenseNoteMode.MERK
+            } else {
+                ExpenseNoteMode.NOTE
+            }
+
+            return ExpenseSubCategoryInputConfig(
+                categoryName = cleanCat,
+                subCategoryName = cleanSub,
+                noteMode = inferredNoteMode,
+                isUnitDescriptionEnabled = parsedQtyUnit != null,
+                unitSymbol = parsedQtyUnit?.second ?: "kg"
+            )
         }
     }
 }

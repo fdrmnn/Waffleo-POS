@@ -17,6 +17,8 @@ import com.example.data.model.StaffAccount
 import com.example.data.model.StaffRole
 import com.example.data.model.BankAccountDetail
 import com.example.data.model.DigitalWalletDetail
+import com.example.data.model.ExpenseNoteMode
+import com.example.data.model.ExpenseSubCategoryInputConfig
 import com.example.data.model.WaffleoSeedData
 import com.google.firebase.Timestamp
 import java.util.Date
@@ -54,20 +56,21 @@ class WaffleoLocalStore(context: Context) {
 
     init {
         performOneTimeProductionCleanIfNeeded()
+        purgeLegacyInventoryCacheOnce()
         registerNetworkCallback()
     }
 
     /**
      * Membersihkan seluruh data dummy lokal (Pesanan, Transaksi Keuangan, Bookmark, Audit Log)
      * satu kali saat persiapan rilis v1.0, sambil mempertahankan seluruh Kategori, Sub-Kategori,
-     * Bahan Baku (INGREDIENT), Promo (PROMO), dan Item pada Menu & Modifier (beserta konfigurasi cabang/staff/bank/wallet).
+     * Promo (PROMO), dan Item pada Menu & Modifier (beserta konfigurasi cabang/staff/bank/wallet).
      */
     private fun performOneTimeProductionCleanIfNeeded() {
         if (prefs.getBoolean(KEY_PRODUCTION_CLEAN_V1_DONE, false)) return
         val existingCatalog = loadCatalog()
         if (existingCatalog != null) {
             val cleanedCatalog = existingCatalog.filter { rec ->
-                rec.recordType in listOf("MENU_ITEM", "MODIFIER", "INGREDIENT", "PROMO", "BRANCH_CONFIG") &&
+                rec.recordType in listOf("MENU_ITEM", "MODIFIER", "PROMO", "BRANCH_CONFIG") &&
                     rec.id !in WaffleoSeedData.legacyDummyCatalogIds
             }
             saveCatalog(cleanedCatalog)
@@ -83,6 +86,47 @@ class WaffleoLocalStore(context: Context) {
             .remove(KEY_HIGHEST_ORDER_SEQ)
             .putBoolean(KEY_PRODUCTION_CLEAN_V1_DONE, true)
             .apply()
+    }
+
+    /**
+     * Membersihkan cache lokal sistem Manajemen Stok lama satu kali secara idempoten.
+     * Menjamin Orders (KEY_ORDERS) dan Money Manager (KEY_MONEY_TX) tetap utuh 100%.
+     */
+    private fun purgeLegacyInventoryCacheOnce() {
+        if (prefs.getBoolean(KEY_INVENTORY_RESET_V1_DONE, false)) return
+        val editor = prefs.edit()
+            .remove(KEY_UNIT_CONVERSIONS_LEGACY)
+            .remove(KEY_RECIPES_LEGACY)
+            .remove(KEY_INVENTORY_MOVEMENTS_LEGACY)
+            .remove(KEY_CLOSING_VERIFICATIONS_LEGACY)
+            .remove(KEY_STOCK_AUDITS_LEGACY)
+            .remove(KEY_STOCK_TRANSFERS_LEGACY)
+
+        prefs.all.keys
+            .filter { it.startsWith(KEY_OPENING_PORTIONS_PREFIX_LEGACY) }
+            .forEach { editor.remove(it) }
+
+        val rawCatalog = prefs.getString(KEY_CATALOG, null)
+        if (!rawCatalog.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(rawCatalog)
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    if (!obj.optString("recordType", "MENU_ITEM").equals("INGREDIENT", ignoreCase = true)) {
+                        obj.remove("stockQty")
+                        obj.remove("stockUnit")
+                        obj.remove("costPerUnit")
+                        filteredArr.put(obj)
+                    }
+                }
+                editor.putString(KEY_CATALOG, filteredArr.toString())
+                cachedCatalog = null
+            } catch (_: Exception) {
+            }
+        }
+
+        editor.putBoolean(KEY_INVENTORY_RESET_V1_DONE, true).apply()
     }
 
     fun setOnNetworkRestoredListener(listener: () -> Unit) {
@@ -289,6 +333,11 @@ class WaffleoLocalStore(context: Context) {
                         put("createdBy", ord.createdBy)
                         put("paymentLedgerPayload", ord.paymentLedgerPayload)
                         put("orderTimelinePayload", ord.orderTimelinePayload)
+                        put("processingStage", ord.processingStage)
+                        put("historicalProducedItemsPayload", ord.historicalProducedItemsPayload)
+                        put("revisionCount", ord.revisionCount)
+                        put("overpaidAmount", ord.overpaidAmount)
+                        put("settlementStatus", ord.settlementStatus)
                         put("createdAtMs", ord.createdAt?.toDate()?.time ?: System.currentTimeMillis())
                         put("updatedAtMs", ord.updatedAt?.toDate()?.time ?: System.currentTimeMillis())
                     }
@@ -340,6 +389,11 @@ class WaffleoLocalStore(context: Context) {
                         createdBy = obj.optString("createdBy", "owner"),
                         paymentLedgerPayload = obj.optString("paymentLedgerPayload", "[]"),
                         orderTimelinePayload = obj.optString("orderTimelinePayload", "[]"),
+                        processingStage = obj.optInt("processingStage", if (obj.optBoolean("isPrepared", false)) 2 else 0),
+                        historicalProducedItemsPayload = obj.optString("historicalProducedItemsPayload", "[]"),
+                        revisionCount = obj.optInt("revisionCount", 0),
+                        overpaidAmount = obj.optLong("overpaidAmount", 0L),
+                        settlementStatus = obj.optString("settlementStatus", if (obj.optBoolean("isPaid", false)) "PAID_EXACT" else "UNPAID"),
                         createdAt = Timestamp(Date(createdMs)),
                         updatedAt = Timestamp(Date(updatedMs))
                     )
@@ -371,9 +425,6 @@ class WaffleoLocalStore(context: Context) {
                         put("priceGrabFood", rec.priceGrabFood)
                         put("priceGoFood", rec.priceGoFood)
                         put("priceShopeeFood", rec.priceShopeeFood)
-                        put("stockQty", rec.stockQty)
-                        put("stockUnit", rec.stockUnit)
-                        put("costPerUnit", rec.costPerUnit)
                         put("metadataJson", rec.metadataJson)
                         put("imageUrl", rec.imageUrl)
                         put("isActive", rec.isActive)
@@ -392,11 +443,13 @@ class WaffleoLocalStore(context: Context) {
             val list = mutableListOf<CatalogRecord>()
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
+                val recordType = obj.optString("recordType", "MENU_ITEM")
+                if (recordType.equals("INGREDIENT", ignoreCase = true)) continue
                 list.add(
                     CatalogRecord(
                         id = obj.optString("id", ""),
                         userId = obj.optString("userId", ""),
-                        recordType = obj.optString("recordType", "MENU_ITEM"),
+                        recordType = recordType,
                         branchId = obj.optString("branchId", "Global"),
                         name = obj.optString("name", ""),
                         category = obj.optString("category", ""),
@@ -404,9 +457,6 @@ class WaffleoLocalStore(context: Context) {
                         priceGrabFood = obj.optLong("priceGrabFood", 0L),
                         priceGoFood = obj.optLong("priceGoFood", 0L),
                         priceShopeeFood = obj.optLong("priceShopeeFood", 0L),
-                        stockQty = obj.optDouble("stockQty", 0.0),
-                        stockUnit = obj.optString("stockUnit", "gram"),
-                        costPerUnit = obj.optLong("costPerUnit", 0L),
                         metadataJson = obj.optString("metadataJson", "{}"),
                         imageUrl = obj.optString("imageUrl", ""),
                         isActive = obj.optBoolean("isActive", true)
@@ -1039,6 +1089,49 @@ class WaffleoLocalStore(context: Context) {
         return prefs.getString(KEY_LAST_LOGIN_BRANCH, null)?.takeIf { it.isNotBlank() }
     }
 
+    fun saveExpenseSubCategoryConfigs(configs: Map<String, ExpenseSubCategoryInputConfig>) {
+        val arr = JSONArray()
+        configs.values.forEach { cfg ->
+            if (cfg.categoryName.isNotBlank() || cfg.subCategoryName.isNotBlank()) {
+                arr.put(
+                    JSONObject().apply {
+                        put("categoryName", cfg.categoryName)
+                        put("subCategoryName", cfg.subCategoryName)
+                        put("noteMode", cfg.noteMode.code)
+                        put("isUnitDescriptionEnabled", cfg.isUnitDescriptionEnabled)
+                        put("unitSymbol", cfg.unitSymbol)
+                    }
+                )
+            }
+        }
+        prefs.edit().putString(KEY_EXPENSE_SUBCAT_CONFIGS, arr.toString()).apply()
+    }
+
+    fun loadExpenseSubCategoryConfigs(): Map<String, ExpenseSubCategoryInputConfig> {
+        val raw = prefs.getString(KEY_EXPENSE_SUBCAT_CONFIGS, null) ?: return emptyMap()
+        return try {
+            val arr = JSONArray(raw)
+            val map = LinkedHashMap<String, ExpenseSubCategoryInputConfig>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val cat = obj.optString("categoryName", "").trim()
+                val sub = obj.optString("subCategoryName", "").trim()
+                if (cat.isEmpty() && sub.isEmpty()) continue
+                val cfg = ExpenseSubCategoryInputConfig(
+                    categoryName = cat,
+                    subCategoryName = sub,
+                    noteMode = ExpenseNoteMode.fromCode(obj.optString("noteMode", "NOTE")),
+                    isUnitDescriptionEnabled = obj.optBoolean("isUnitDescriptionEnabled", false),
+                    unitSymbol = obj.optString("unitSymbol", "kg").ifBlank { "kg" }
+                )
+                map[cfg.configKey] = cfg
+            }
+            map
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
     companion object {
         private const val PREFS_NAME = "waffleo_offline_store_v1"
         private const val KEY_STORE_OPEN_PREFIX = "store_open_status"
@@ -1063,7 +1156,16 @@ class WaffleoLocalStore(context: Context) {
         private const val KEY_DELETED_BRANCHES = "deleted_branches_json"
         private const val KEY_DELETED_ORDERS = "deleted_orders_json"
         private const val KEY_PRODUCTION_CLEAN_V1_DONE = "production_clean_v1_done"
+        private const val KEY_INVENTORY_RESET_V1_DONE = "inventory_reset_v1_done"
         private const val KEY_ACTIVE_SESSION = "active_pos_session_json"
         private const val KEY_LAST_LOGIN_BRANCH = "last_login_branch_id"
+        private const val KEY_EXPENSE_SUBCAT_CONFIGS = "expense_subcat_configs_json"
+        private const val KEY_UNIT_CONVERSIONS_LEGACY = "unit_conversions_json"
+        private const val KEY_RECIPES_LEGACY = "recipes_json"
+        private const val KEY_INVENTORY_MOVEMENTS_LEGACY = "inventory_movements_json"
+        private const val KEY_CLOSING_VERIFICATIONS_LEGACY = "closing_verifications_json"
+        private const val KEY_STOCK_AUDITS_LEGACY = "stock_audits_json"
+        private const val KEY_STOCK_TRANSFERS_LEGACY = "stock_transfers_json"
+        private const val KEY_OPENING_PORTIONS_PREFIX_LEGACY = "opening_prepared_portions"
     }
 }

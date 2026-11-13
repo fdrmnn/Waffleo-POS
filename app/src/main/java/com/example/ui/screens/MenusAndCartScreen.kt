@@ -935,13 +935,37 @@ fun MenusAndCartScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // MIDDLE SCROLLABLE SECTION: CART ITEMS + PROMO + NOTES
-                val promoOptions = remember(activePromos) {
+                val eligiblePromos = remember(
+                    cartItems,
+                    cartMedia,
+                    activePromos,
+                    catalog,
+                    cartIsBackdated,
+                    cartBackdatedDateKey,
+                    cartBackdatedTimeText,
+                    orders
+                ) {
+                    viewModel.getEligiblePromosForCart(
+                        items = cartItems,
+                        media = cartMedia,
+                        allCatalog = catalog
+                    )
+                }
+                val promoOptions = remember(eligiblePromos) {
                     listOf(
                         CatalogRecord(id = "AUTO", name = "✨ Otomatis (Promo Terbaik)"),
                         CatalogRecord(id = "NONE", name = "Tanpa Promo")
-                    ) + activePromos
+                    ) + eligiblePromos
                 }
                 val effectiveSelectedMode = selectedPromoId.ifBlank { "AUTO" }
+                androidx.compose.runtime.LaunchedEffect(eligiblePromos, effectiveSelectedMode) {
+                    if (effectiveSelectedMode != "AUTO" &&
+                        effectiveSelectedMode != "NONE" &&
+                        eligiblePromos.none { it.id == effectiveSelectedMode }
+                    ) {
+                        viewModel.setSelectedPromo("AUTO")
+                    }
+                }
                 val currentPromoObj = promoOptions.firstOrNull { it.id == effectiveSelectedMode } ?: promoOptions.first()
 
                 if (cartItems.isNotEmpty()) {
@@ -1068,7 +1092,7 @@ fun MenusAndCartScreen(
                                 onValueChange = { viewModel.setCartNotes(it) },
                                 label = "Notes Customer",
                                 placeholder = "Catatan khusus...",
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 modifier = Modifier.weight(0.52f),
                                 testTag = "cart_notes_input"
                             )

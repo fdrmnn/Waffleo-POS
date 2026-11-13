@@ -1,0 +1,264 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Allows direct access to the central 1-server workspace /users/waffleo_master_workspace
+    // for all WAFFLEO POS devices without requiring a Google Account, while keeping private personal
+    // paths /users/{uid} strictly isolated to signed-in owners.
+    function isOwnerOrSharedWorkspace(userId) {
+      return userId == 'waffleo_master_workspace' || (isSignedIn() && request.auth.uid == userId);
+    }
+
+    function isValidWorkspaceUserId(userId, docUserId) {
+      return docUserId is string && docUserId.size() >= 1 && docUserId.size() <= 128 &&
+        (
+          (userId == 'waffleo_master_workspace' && (docUserId == 'waffleo_master_workspace' || (isSignedIn() && docUserId == request.auth.uid))) ||
+          (isSignedIn() && request.auth.uid == userId && docUserId == request.auth.uid)
+        );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128;
+    }
+
+    function isValidOrderRecord(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+        'userId', 'orderNumber', 'sequenceIndex', 'branchId', 'orderMedia',
+        'customerData', 'itemsSummary', 'itemsPayload', 'notes', 'promoCode',
+        'subtotalAmount', 'discountAmount', 'totalAmount', 'paidAmount',
+        'paymentMethod', 'isPaid', 'isPrepared', 'status', 'cancelReason',
+        'cancelledBy', 'cancelledAtText', 'shortfallAmount', 'changeDueAmount',
+        'createdBy', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'userId', 'orderNumber', 'sequenceIndex', 'branchId', 'orderMedia',
+        'customerData', 'itemsSummary', 'itemsPayload', 'notes', 'promoCode',
+        'subtotalAmount', 'discountAmount', 'totalAmount', 'paidAmount',
+        'cashReceivedAmount', 'paymentMethod', 'isPaid', 'isPrepared', 'status',
+        'cancelReason', 'cancelledBy', 'cancelledAtText', 'shortfallAmount',
+        'changeDueAmount', 'splitCashAmount', 'splitQrisAmount', 'createdBy',
+        'paymentLedgerPayload', 'orderTimelinePayload', 'processingStage',
+        'historicalProducedItemsPayload', 'revisionCount', 'overpaidAmount',
+        'settlementStatus', 'createdAt', 'updatedAt'
+      ])
+      && isValidWorkspaceUserId(userId, data.userId)
+      && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 60
+      && data.sequenceIndex is int && data.sequenceIndex >= 0
+      && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+      && data.orderMedia is string && data.orderMedia.size() >= 1 && data.orderMedia.size() <= 60
+      && data.customerData is string && data.customerData.size() <= 160
+      && data.itemsSummary is string && data.itemsSummary.size() <= 4000
+      && data.itemsPayload is string && data.itemsPayload.size() <= 20000
+      && data.notes is string && data.notes.size() <= 1000
+      && data.promoCode is string && data.promoCode.size() <= 120
+      && data.subtotalAmount is int && data.subtotalAmount >= 0 && data.subtotalAmount <= 500000000
+      && data.discountAmount is int && data.discountAmount >= 0 && data.discountAmount <= 500000000
+      && data.totalAmount is int && data.totalAmount >= 0 && data.totalAmount <= 500000000
+      && data.paidAmount is int && data.paidAmount >= 0 && data.paidAmount <= 500000000
+      && (!('cashReceivedAmount' in data) || (data.cashReceivedAmount is int && data.cashReceivedAmount >= 0 && data.cashReceivedAmount <= 500000000))
+      && data.paymentMethod is string && data.paymentMethod.size() >= 1 && data.paymentMethod.size() <= 120
+      && data.isPaid is bool
+      && data.isPrepared is bool
+      && data.status in ['ACTIVE', 'DONE', 'CANCELLED', 'ERASED']
+      && data.cancelReason is string && data.cancelReason.size() <= 500
+      && data.cancelledBy is string && data.cancelledBy.size() <= 160
+      && data.cancelledAtText is string && data.cancelledAtText.size() <= 120
+      && data.shortfallAmount is int && data.shortfallAmount >= 0 && data.shortfallAmount <= 500000000
+      && data.changeDueAmount is int && data.changeDueAmount >= 0 && data.changeDueAmount <= 500000000
+      && (!('splitCashAmount' in data) || (data.splitCashAmount is int && data.splitCashAmount >= 0))
+      && (!('splitQrisAmount' in data) || (data.splitQrisAmount is int && data.splitQrisAmount >= 0))
+      && (!('paymentLedgerPayload' in data) || (data.paymentLedgerPayload is string && data.paymentLedgerPayload.size() <= 25000))
+      && (!('orderTimelinePayload' in data) || (data.orderTimelinePayload is string && data.orderTimelinePayload.size() <= 25000))
+      && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 80
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isOrderImmutableFieldsUnchanged() {
+      return request.resource.data.userId == resource.data.userId
+        && request.resource.data.orderNumber == resource.data.orderNumber
+        && request.resource.data.sequenceIndex == resource.data.sequenceIndex
+        && (
+          request.resource.data.status in ['ACTIVE', 'CANCELLED', 'ERASED']
+          || !(resource.data.isPrepared == true && request.resource.data.isPrepared == false)
+        );
+    }
+
+    // PHASE 2 STRICT CATALOG RULES (deploy ONLY after scripts/cleanup_inventory_firestore.mjs --execute finishes)
+    function isValidCatalogRecord(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+        'userId', 'recordType', 'branchId', 'name', 'category',
+        'priceWalkIn', 'priceGrabFood', 'priceGoFood', 'priceShopeeFood',
+        'metadataJson', 'isActive', 'createdAt', 'updatedAt'
+      ])
+      && data.keys().hasOnly([
+        'userId', 'recordType', 'branchId', 'name', 'category',
+        'priceWalkIn', 'priceGrabFood', 'priceGoFood', 'priceShopeeFood',
+        'metadataJson', 'imageUrl', 'isActive', 'createdAt', 'updatedAt'
+      ])
+      && isValidWorkspaceUserId(userId, data.userId)
+      && data.recordType in ['MENU_ITEM', 'MODIFIER', 'PROMO', 'BRANCH_CONFIG']
+      && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+      && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
+      && data.category is string && data.category.size() >= 1 && data.category.size() <= 100
+      && data.priceWalkIn is int && data.priceWalkIn >= 0 && data.priceWalkIn <= 100000000
+      && data.priceGrabFood is int && data.priceGrabFood >= 0 && data.priceGrabFood <= 100000000
+      && data.priceGoFood is int && data.priceGoFood >= 0 && data.priceGoFood <= 100000000
+      && data.priceShopeeFood is int && data.priceShopeeFood >= 0 && data.priceShopeeFood <= 100000000
+      && data.metadataJson is string && data.metadataJson.size() >= 2 && data.metadataJson.size() <= 15000
+      && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000))
+      && data.isActive is bool
+      && data.createdAt is timestamp
+      && data.updatedAt is timestamp;
+    }
+
+    function isCatalogImmutableFieldsUnchanged() {
+      return request.resource.data.userId == resource.data.userId;
+    }
+
+    function isValidAuditLogRecord(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+        'userId', 'branchId', 'actorUsername', 'actorRole', 'actionType',
+        'entityId', 'summary', 'beforeSnapshot', 'afterSnapshot', 'createdAt'
+      ])
+      && data.keys().hasOnly([
+        'userId', 'branchId', 'actorUsername', 'actorRole', 'actionType',
+        'entityId', 'summary', 'beforeSnapshot', 'afterSnapshot', 'createdAt'
+      ])
+      && isValidWorkspaceUserId(userId, data.userId)
+      && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+      && data.actorUsername is string && data.actorUsername.size() >= 1 && data.actorUsername.size() <= 80
+      && data.actorRole is string && data.actorRole.size() >= 1 && data.actorRole.size() <= 60
+      && data.actionType is string && data.actionType.size() >= 1 && data.actionType.size() <= 80
+      && data.entityId is string && data.entityId.size() >= 1 && data.entityId.size() <= 128
+      && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 2000
+      && data.beforeSnapshot is string && data.beforeSnapshot.size() <= 10000
+      && data.afterSnapshot is string && data.afterSnapshot.size() <= 10000
+      && data.createdAt is timestamp;
+    }
+
+    // PHASE 2 STRICT MONEY TRANSACTION RULES (deploy ONLY after scripts/cleanup_inventory_firestore.mjs --execute finishes)
+    function isValidMoneyTransactionDoc(userId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'type', 'timestampMillis', 'dateKey', 'monthKey',
+          'timeFormatted', 'amount', 'transferFee', 'category', 'subCategory',
+          'accountGroup', 'accountName', 'toAccountGroup', 'toAccountName',
+          'note', 'description', 'tag', 'repetition', 'isAutoPosSync',
+          'posSyncKey', 'createdBy', 'feeAccountChoice', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
+        && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+        && data.type in ['INCOME', 'EXPENSE', 'TRANSFER']
+        && data.amount is int && data.amount >= 0 && data.amount <= 10000000000;
+    }
+
+    function isValidStaffAccountDoc(userId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'username', 'password', 'role',
+          'displayName', 'email', 'phone', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
+        && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+        && data.username is string && data.username.size() >= 1 && data.username.size() <= 80
+        && data.role in ['DEVELOPER', 'OWNER', 'SUPERVISOR', 'KASIR'];
+    }
+
+    function isValidBranchProfileDoc(userId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'userId', 'branchId', 'name', 'location', 'ownerName',
+          'ownerEmail', 'ownerPhone', 'ownerUsername',
+          'initializedFrom', 'createdAtText', 'updatedAt'
+        ])
+        && isValidWorkspaceUserId(userId, data.userId)
+        && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
+        && (!('name' in data) || (data.name is string && data.name.size() <= 200))
+        && data.location is string && data.location.size() <= 300
+        && data.ownerName is string && data.ownerName.size() <= 160
+        && (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 160))
+        && (!('ownerPhone' in data) || (data.ownerPhone is string && data.ownerPhone.size() <= 60))
+        && data.ownerUsername is string && data.ownerUsername.size() >= 1 && data.ownerUsername.size() <= 80
+        && data.initializedFrom is string && data.initializedFrom.size() <= 160
+        && data.createdAtText is string && data.createdAtText.size() <= 120;
+    }
+
+    function isValidWorkspaceSettingsDoc(userId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['userId', 'settingKey', 'payloadJson', 'updatedAt'])
+        && isValidWorkspaceUserId(userId, data.userId)
+        && data.settingKey is string && data.settingKey.size() >= 1 && data.settingKey.size() <= 100
+        && data.payloadJson is string && data.payloadJson.size() >= 2 && data.payloadJson.size() <= 50000;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwnerOrSharedWorkspace(userId);
+
+      // ORDERS: Supports permanent deletion of erased orders by authorized workspace Owner.
+      match /orders/{orderId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(orderId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create: if isOwnerOrSharedWorkspace(userId) && isValidId(orderId) && isValidOrderRecord(userId);
+        allow update: if isOwnerOrSharedWorkspace(userId) && isValidId(orderId) && isValidOrderRecord(userId) && isOrderImmutableFieldsUnchanged();
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(orderId);
+      }
+
+      match /catalog/{itemId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(itemId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create: if isOwnerOrSharedWorkspace(userId) && isValidId(itemId) && isValidCatalogRecord(userId);
+        allow update: if isOwnerOrSharedWorkspace(userId) && isValidId(itemId) && isValidCatalogRecord(userId) && isCatalogImmutableFieldsUnchanged();
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(itemId);
+      }
+
+      // AUDIT LOGS: Immutable append-only (update and delete permanently blocked).
+      match /audit_logs/{logId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(logId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create: if isOwnerOrSharedWorkspace(userId) && isValidId(logId) && isValidAuditLogRecord(userId);
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      match /money_transactions/{txId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(txId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create, update: if isOwnerOrSharedWorkspace(userId) && isValidId(txId) && isValidMoneyTransactionDoc(userId);
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(txId);
+      }
+
+      match /staff_accounts/{accId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(accId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create, update: if isOwnerOrSharedWorkspace(userId) && isValidId(accId) && isValidStaffAccountDoc(userId);
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(accId);
+      }
+
+      match /branch_profiles/{branchDocId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(branchDocId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create, update: if isOwnerOrSharedWorkspace(userId) && isValidId(branchDocId) && isValidBranchProfileDoc(userId);
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(branchDocId);
+      }
+
+      match /workspace_settings/{settingId} {
+        allow get: if isOwnerOrSharedWorkspace(userId) && isValidId(settingId);
+        allow list: if isOwnerOrSharedWorkspace(userId);
+        allow create, update: if isOwnerOrSharedWorkspace(userId) && isValidId(settingId) && isValidWorkspaceSettingsDoc(userId);
+        allow delete: if isOwnerOrSharedWorkspace(userId) && isValidId(settingId);
+      }
+    }
+  }
+}

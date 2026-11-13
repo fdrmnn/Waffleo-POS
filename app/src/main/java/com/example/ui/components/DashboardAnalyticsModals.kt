@@ -24,15 +24,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeliveryDining
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocalMall
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,6 +52,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,21 +70,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.model.AuditLogRecord
 import com.example.data.model.CartLineItem
 import com.example.data.model.CatalogRecord
 import com.example.data.model.OrderMedia
 import com.example.data.model.OrderRecord
+import com.example.data.model.OrderTimelineEvent
+import com.example.data.model.WaffleoOrderEngine
+import com.example.data.model.formatCleanBranchName
+import com.example.data.model.sanitizeBranchIdsInText
 import com.example.ui.theme.ChampagneGoldAccent
 import com.example.ui.theme.DeepCaramelGold
 import com.example.ui.theme.ElevatedIvoryCard
+import com.example.ui.theme.HoneyAmberWarning
 import com.example.ui.theme.MatchaSageSuccess
 import com.example.ui.theme.MutedCocoaText
 import com.example.ui.theme.RichEspressoPrimary
 import com.example.ui.theme.RoastedMochaSecondary
+import com.example.ui.theme.SoftAmberBg
 import com.example.ui.theme.SoftGoldHighlight
 import com.example.ui.theme.SoftOatSurface
 import com.example.ui.theme.SoftSageBg
+import com.example.ui.theme.SoftTerracottaBg
 import com.example.ui.theme.SubtleSandBorder
+import com.example.ui.theme.TerracottaDanger
 import com.example.ui.viewmodel.WaffleoViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -100,6 +119,8 @@ fun DashboardChannelTransactionsDialog(
     totalDashboardNetRevenue: Long,
     onDismiss: () -> Unit
 ) {
+    var selectedOrderForAudit by remember { mutableStateOf<OrderRecord?>(null) }
+
     // Sort transactions from newest to oldest
     val sortedOrders = remember(orders) {
         orders.sortedByDescending {
@@ -387,17 +408,731 @@ fun DashboardChannelTransactionsDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
                         items(sortedOrders, key = { it.id }) { order ->
-                            ChannelTransactionCard(
+                            CompactChannelTransactionRow(
                                 order = order,
+                                channelName = channelName,
                                 catalog = catalog,
                                 viewModel = viewModel,
                                 isPlatform = isPlatform,
-                                channelColor = channelColor
+                                channelColor = channelColor,
+                                onClick = { selectedOrderForAudit = order }
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    selectedOrderForAudit?.let { targetOrder ->
+        ChannelOrderAuditTrailDialog(
+            order = targetOrder,
+            catalog = catalog,
+            viewModel = viewModel,
+            onDismiss = { selectedOrderForAudit = null }
+        )
+    }
+}
+
+/**
+ * Compact clickable transaction row inside Distribusi Kanal & Metode Pembayaran dialog.
+ * Clicking any row opens the full Audit Trail popup for that order.
+ */
+@Composable
+private fun CompactChannelTransactionRow(
+    order: OrderRecord,
+    channelName: String,
+    catalog: List<CatalogRecord>,
+    viewModel: WaffleoViewModel,
+    isPlatform: Boolean,
+    channelColor: Color,
+    onClick: () -> Unit
+) {
+    val timeDateLabel = remember(order) {
+        val dt = (order.updatedAt ?: order.createdAt)?.toDate()
+        val resolvedDate = if (dt != null) {
+            dt
+        } else {
+            val epochMs = order.id
+                .removePrefix("v1_ord_bd_")
+                .removePrefix("v1_ord_")
+                .takeWhile { it.isDigit() }
+                .toLongOrNull()
+            if (epochMs != null && epochMs > 1_000_000_000L) Date(epochMs) else Date()
+        }
+        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.forLanguageTag("id-ID")).format(resolvedDate)
+    }
+
+    val fullOrderNet = remember(order, catalog) { viewModel.calculateOrderNetAmount(order, catalog) }
+    val platformFee = (order.totalAmount - fullOrderNet).coerceAtLeast(0L)
+    val isSplit = order.paymentMethod.contains("Cash + QRIS", ignoreCase = true) ||
+        (order.splitCashAmount > 0L && order.splitQrisAmount > 0L)
+
+    val displayedChannelNet = remember(order, channelName, fullOrderNet, isSplit) {
+        when {
+            isSplit && channelName.equals("Cash", ignoreCase = true) ->
+                if (order.splitCashAmount > 0L) order.splitCashAmount.coerceAtMost(fullOrderNet)
+                else (fullOrderNet - order.splitQrisAmount).coerceAtLeast(0L)
+            isSplit && channelName.equals("QRIS", ignoreCase = true) ->
+                if (order.splitQrisAmount > 0L) order.splitQrisAmount.coerceAtMost(fullOrderNet)
+                else (fullOrderNet / 2)
+            else -> fullOrderNet
+        }
+    }
+
+    val customerLabel = remember(order) {
+        val cust = order.customerData.trim()
+        when {
+            cust.isNotBlank() && !cust.equals("Walk In Guest", ignoreCase = true) -> cust
+            order.orderMedia.equals("Di tempat", ignoreCase = true) -> "Pelanggan Di tempat"
+            else -> ""
+        }
+    }
+
+    val primaryHeaderLabel = remember(order.orderMedia, customerLabel) {
+        if (customerLabel.isNotBlank() && !customerLabel.equals(order.orderMedia, ignoreCase = true)) {
+            "${order.orderMedia}  •  $customerLabel"
+        } else {
+            order.orderMedia
+        }
+    }
+
+    val subtitleLabel = remember(timeDateLabel, order, isPlatform, platformFee, isSplit) {
+        buildString {
+            append(timeDateLabel)
+            append(" • Metode: ")
+            append(order.paymentMethod.ifBlank { "Cash" })
+            if (isSplit) {
+                append(" (Tunai ")
+                append(WaffleoViewModel.formatIdr(order.splitCashAmount))
+                append(" + QRIS ")
+                append(WaffleoViewModel.formatIdr(order.splitQrisAmount))
+                append(")")
+            }
+            if (isPlatform && platformFee > 0L) {
+                append(" • Potongan: -")
+                append(WaffleoViewModel.formatIdr(platformFee))
+            }
+            if (order.discountAmount > 0L) {
+                append(" • Promo: -")
+                append(WaffleoViewModel.formatIdr(order.discountAmount))
+            }
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = SoftOatSurface.copy(alpha = 0.48f),
+        border = BorderStroke(1.dp, SubtleSandBorder.copy(alpha = 0.75f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .testTag("channel_tx_row_${order.displayOrderNumber}")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = RichEspressoPrimary
+                    ) {
+                        Text(
+                            text = order.displayOrderNumber,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SoftGoldHighlight,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
+                    Text(
+                        text = primaryHeaderLabel,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = RichEspressoPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Text(
+                    text = subtitleLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MutedCocoaText,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = WaffleoViewModel.formatIdr(displayedChannelNet),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = channelColor
+                    )
+                    Text(
+                        text = if (isPlatform) "Net Masuk BCA" else "Dana Masuk",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MatchaSageSuccess
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = "Lihat Audit Trail",
+                    tint = MutedCocoaText.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Audit Trail Modal opened when clicking any transaction row inside Distribusi Kanal & Metode Pembayaran.
+ * Displays complete order summary, sorted item breakdown, financial settlement, and chronological audit timeline.
+ */
+@Composable
+fun ChannelOrderAuditTrailDialog(
+    order: OrderRecord,
+    catalog: List<CatalogRecord>,
+    viewModel: WaffleoViewModel,
+    onDismiss: () -> Unit
+) {
+    val allAuditLogs by viewModel.auditLogs.collectAsState()
+    val menuCategories by viewModel.customMenuCategories.collectAsState()
+    val modifierCategories by viewModel.customModifierCategories.collectAsState()
+
+    val sortedItems = remember(order.itemsPayload, catalog, menuCategories, modifierCategories) {
+        WaffleoOrderEngine.sortCartLineItems(
+            items = CartLineItem.deserializeList(order.itemsPayload),
+            catalog = catalog,
+            menuCategories = menuCategories,
+            modifierCategories = modifierCategories
+        )
+    }
+
+    val media = remember(order.orderMedia) { OrderMedia.fromLabel(order.orderMedia) }
+    val isPlatform = media.isPlatform
+    val netAmount = remember(order, catalog) { viewModel.calculateOrderNetAmount(order, catalog) }
+    val platformFee = (order.totalAmount - netAmount).coerceAtLeast(0L)
+
+    val fallbackDateText = remember(order) {
+        val dt = (order.createdAt ?: order.updatedAt)?.toDate()
+            ?: Date(
+                order.id.removePrefix("v1_ord_bd_").removePrefix("v1_ord_")
+                    .takeWhile { it.isDigit() }.toLongOrNull() ?: System.currentTimeMillis()
+            )
+        SimpleDateFormat("dd MMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(dt)
+    }
+
+    val effectiveTimelineEvents = remember(order, fallbackDateText) {
+        val rawEvents = order.getTimelineEvents()
+        if (rawEvents.isNotEmpty()) {
+            rawEvents
+        } else {
+            listOfNotNull(
+                OrderTimelineEvent(
+                    eventId = "evt_seed_1",
+                    timeText = fallbackDateText,
+                    eventType = "ORDER_CREATED",
+                    actorUsername = order.createdBy,
+                    title = "Pesanan Dibuat",
+                    description = "Pesanan ${order.displayOrderNumber} masuk via ${order.orderMedia} (${order.customerData}). Total: ${WaffleoViewModel.formatIdr(order.totalAmount)}"
+                ),
+                if (order.paidAmount > 0L) {
+                    OrderTimelineEvent(
+                        eventId = "evt_seed_2",
+                        timeText = fallbackDateText,
+                        eventType = "PAYMENT_EVENT",
+                        actorUsername = order.createdBy,
+                        title = "Pembayaran Diterima",
+                        description = "Diterima ${WaffleoViewModel.formatIdr(order.paidAmount)} via ${order.paymentMethod}."
+                    )
+                } else null,
+                if (order.status == "DONE") {
+                    OrderTimelineEvent(
+                        eventId = "evt_seed_3",
+                        timeText = fallbackDateText,
+                        eventType = "ORDER_COMPLETED",
+                        actorUsername = order.createdBy,
+                        title = "Pesanan Selesai (Done)",
+                        description = "Pesanan diselesaikan dan tercatat pada laporan."
+                    )
+                } else if (order.status == "CANCELLED") {
+                    OrderTimelineEvent(
+                        eventId = "evt_seed_3",
+                        timeText = order.cancelledAtText.ifBlank { fallbackDateText },
+                        eventType = "ORDER_CANCELLED",
+                        actorUsername = order.cancelledBy,
+                        title = "Pesanan Dibatalkan",
+                        description = "Alasan: ${order.cancelReason.ifBlank { "-" }}"
+                    )
+                } else null
+            )
+        }
+    }
+
+    val relatedAuditLogs = remember(allAuditLogs, order) {
+        allAuditLogs
+            .filter { log ->
+                log.entityId.isNotBlank() && (
+                    log.entityId == order.id ||
+                        log.entityId == order.orderNumber ||
+                        log.entityId == order.displayOrderNumber
+                    )
+            }
+            .sortedBy { it.createdAt?.toDate()?.time ?: 0L }
+    }
+
+    val (statusBg, statusFg, statusText) = when (order.status) {
+        "DONE" -> Triple(SoftSageBg, MatchaSageSuccess, "Selesai (Done)")
+        "CANCELLED" -> Triple(SoftTerracottaBg, TerracottaDanger, "Dibatalkan")
+        "ERASED" -> Triple(SoftTerracottaBg, TerracottaDanger, "Dihapus")
+        else -> Triple(SoftGoldHighlight, DeepCaramelGold, "Aktif")
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.86f)
+                .widthIn(max = 700.dp)
+                .padding(8.dp),
+            shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(containerColor = ElevatedIvoryCard),
+            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+            border = BorderStroke(1.dp, SubtleSandBorder)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(22.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = SoftGoldHighlight,
+                            border = BorderStroke(1.dp, ChampagneGoldAccent.copy(alpha = 0.5f)),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Audit Trail",
+                                    tint = DeepCaramelGold,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Audit Trail Pesanan",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = RichEspressoPrimary
+                                )
+                                Surface(shape = RoundedCornerShape(6.dp), color = RichEspressoPrimary) {
+                                    Text(
+                                        text = order.displayOrderNumber,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SoftGoldHighlight,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Surface(shape = RoundedCornerShape(50), color = statusBg) {
+                                    Text(
+                                        text = statusText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = statusFg,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "${order.orderMedia} • Kasir: @${order.createdBy} • Cabang ${formatCleanBranchName(order.branchId, order.branchId)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedCocoaText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_audit_trail_dialog_button")
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = SoftOatSurface,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Tutup",
+                                    tint = RichEspressoPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(
+                    color = SubtleSandBorder.copy(alpha = 0.65f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
+                // Scrollable Body
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 1. Ringkasan Pesanan & Finansial
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = SoftOatSurface.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, SubtleSandBorder.copy(alpha = 0.8f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Ringkasan Item & Finansial",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RichEspressoPrimary
+                                )
+                                if (order.customerData.isNotBlank()) {
+                                    Text(
+                                        text = "Pelanggan: ${order.customerData}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MutedCocoaText
+                                    )
+                                }
+                            }
+
+                            if (sortedItems.isNotEmpty()) {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    sortedItems.forEach { line ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.Top
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "${line.qty}x ${line.formattedTitle()}",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = RichEspressoPrimary
+                                                )
+                                                val customText = line.formattedCustomization()
+                                                if (customText.isNotBlank() && customText != "Tanpa Add-on" && customText != "Standar") {
+                                                    Text(
+                                                        text = "+ $customText",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MutedCocoaText
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = WaffleoViewModel.formatIdr(line.lineTotalFor(media)),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = RichEspressoPrimary
+                                            )
+                                        }
+                                    }
+                                }
+                            } else if (order.itemsSummary.isNotBlank()) {
+                                Text(
+                                    text = order.itemsSummary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = RichEspressoPrimary
+                                )
+                            }
+
+                            if (order.notes.isNotBlank() && order.notes != "-") {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = SoftAmberBg.copy(alpha = 0.7f)
+                                ) {
+                                    Text(
+                                        text = "Catatan: ${order.notes}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = HoneyAmberWarning,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(color = SubtleSandBorder.copy(alpha = 0.6f))
+
+                            if (order.discountAmount > 0L) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Diskon Promo ${if (order.promoCode.isNotBlank()) "(${order.promoCode})" else ""}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TerracottaDanger
+                                    )
+                                    Text(
+                                        text = "-${WaffleoViewModel.formatIdr(order.discountAmount)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TerracottaDanger
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Total Pesanan (${order.paymentMethod.ifBlank { "Cash" }})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = RichEspressoPrimary
+                                )
+                                Text(
+                                    text = WaffleoViewModel.formatIdr(order.totalAmount),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RichEspressoPrimary
+                                )
+                            }
+
+                            if (order.paymentMethod.contains("Cash + QRIS", ignoreCase = true) ||
+                                (order.splitCashAmount > 0L && order.splitQrisAmount > 0L)
+                            ) {
+                                Text(
+                                    text = "Rincian Split: Tunai ${WaffleoViewModel.formatIdr(order.splitCashAmount)} • QRIS ${WaffleoViewModel.formatIdr(order.splitQrisAmount)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MutedCocoaText
+                                )
+                            }
+
+                            if (isPlatform && platformFee > 0L) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Potongan Komisi Platform (${order.orderMedia})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TerracottaDanger
+                                    )
+                                    Text(
+                                        text = "-${WaffleoViewModel.formatIdr(platformFee)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TerracottaDanger
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Dana Masuk Bersih",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MatchaSageSuccess
+                                )
+                                Text(
+                                    text = WaffleoViewModel.formatIdr(netAmount),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MatchaSageSuccess
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. Jejak Kronologi Pesanan (Order Timeline Events)
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = SoftOatSurface.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, SubtleSandBorder.copy(alpha = 0.7f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Kronologi Aktivitas Pesanan",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RichEspressoPrimary
+                                )
+                                Surface(shape = RoundedCornerShape(50), color = SoftGoldHighlight) {
+                                    Text(
+                                        text = "${effectiveTimelineEvents.size} Langkah",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DeepCaramelGold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            effectiveTimelineEvents.forEachIndexed { idx, ev ->
+                                ChannelAuditTimelineStepCard(
+                                    event = ev,
+                                    isLast = idx == effectiveTimelineEvents.lastIndex
+                                )
+                            }
+                        }
+                    }
+
+                    // 3. Log Audit Sistem Tambahan (jika ada record di koleksi AuditLog)
+                    if (relatedAuditLogs.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = SoftOatSurface.copy(alpha = 0.35f),
+                            border = BorderStroke(1.dp, SubtleSandBorder.copy(alpha = 0.7f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Rekam Log Audit Sistem (${relatedAuditLogs.size})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RichEspressoPrimary
+                                )
+
+                                relatedAuditLogs.forEach { log ->
+                                    val logTime = remember(log.createdAt) {
+                                        val dt = log.createdAt?.toDate()
+                                        if (dt != null) SimpleDateFormat("dd MMM yyyy, HH:mm:ss", Locale.forLanguageTag("id-ID")).format(dt)
+                                        else fallbackDateText
+                                    }
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = ElevatedIvoryCard,
+                                        border = BorderStroke(0.8.dp, SubtleSandBorder.copy(alpha = 0.6f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(10.dp),
+                                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Surface(shape = RoundedCornerShape(50), color = SoftOatSurface) {
+                                                    Text(
+                                                        text = log.actionType.ifBlank { "AUDIT" },
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = RichEspressoPrimary,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                Text(
+                                                    text = logTime,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MutedCocoaText
+                                                )
+                                            }
+                                            Text(
+                                                text = "Oleh: @${log.actorUsername} (${log.actorRole})",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MutedCocoaText
+                                            )
+                                            if (log.summary.isNotBlank()) {
+                                                Text(
+                                                    text = sanitizeBranchIdsInText(log.summary),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = RichEspressoPrimary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -406,224 +1141,97 @@ fun DashboardChannelTransactionsDialog(
     }
 }
 
-/**
- * Stylish transaction row item inside the Channel Transactions Modal
- */
 @Composable
-private fun ChannelTransactionCard(
-    order: OrderRecord,
-    catalog: List<CatalogRecord>,
-    viewModel: WaffleoViewModel,
-    isPlatform: Boolean,
-    channelColor: Color
+private fun ChannelAuditTimelineStepCard(
+    event: OrderTimelineEvent,
+    isLast: Boolean
 ) {
-    val items = remember(order.itemsPayload) {
-        CartLineItem.deserializeList(order.itemsPayload)
+    val (icon, color) = when (event.eventType) {
+        "ORDER_CREATED" -> Icons.Default.Receipt to DeepCaramelGold
+        "PAYMENT_EVENT" -> Icons.Default.Payment to MatchaSageSuccess
+        "ORDER_EDITED" -> Icons.Default.Edit to DeepCaramelGold
+        "ORDER_PREPARED" -> Icons.Default.Restaurant to HoneyAmberWarning
+        "ORDER_COMPLETED", "ORDER_DONE" -> Icons.Default.CheckCircle to MatchaSageSuccess
+        "ORDER_CANCELLED" -> Icons.Default.Cancel to TerracottaDanger
+        else -> Icons.Default.Info to MutedCocoaText
     }
 
-    val timeFormatted = remember(order) {
-        val dt = (order.updatedAt ?: order.createdAt)?.toDate()
-        if (dt != null) {
-            SimpleDateFormat("HH:mm • dd MMMM yyyy", Locale.forLanguageTag("id-ID")).format(dt)
-        } else {
-            val epochMs = order.id.removePrefix("v1_ord_bd_").removePrefix("v1_ord_").takeWhile { it.isDigit() }.toLongOrNull()
-            if (epochMs != null && epochMs > 1000000000L) {
-                SimpleDateFormat("HH:mm • dd MMMM yyyy", Locale.forLanguageTag("id-ID")).format(Date(epochMs))
-            } else {
-                SimpleDateFormat("HH:mm • dd MMMM yyyy", Locale.forLanguageTag("id-ID")).format(Date())
-            }
-        }
-    }
-
-    val netAmount = remember(order, catalog) { viewModel.calculateOrderNetAmount(order, catalog) }
-    val platformFee = (order.totalAmount - netAmount).coerceAtLeast(0L)
-
-    // Platform ID or Customer identifier
-    val platformIdentifier = remember(order) {
-        val cust = order.customerData.trim()
-        if (cust.isNotBlank() && !cust.equals("Walk In Guest", ignoreCase = true) && !cust.equals("Pelanggan Di tempat", ignoreCase = true)) {
-            cust
-        } else {
-            order.orderMedia
-        }
-    }
-
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = SoftOatSurface.copy(alpha = 0.45f)),
-        border = BorderStroke(1.dp, SubtleSandBorder.copy(alpha = 0.7f)),
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-        ) {
-            // Header: Platform ID on Left, Internal WFL ID on Right
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                shape = CircleShape,
+                color = color.copy(alpha = 0.15f),
+                border = BorderStroke(1.5.dp, color),
+                modifier = Modifier.size(32.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = channelColor.copy(alpha = 0.12f),
-                        border = BorderStroke(0.8.dp, channelColor.copy(alpha = 0.35f))
-                    ) {
-                        Text(
-                            text = platformIdentifier,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = channelColor,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                        )
-                    }
-
-                    if (order.customerData.isNotBlank() && platformIdentifier != order.customerData) {
-                        Text(
-                            text = "(${order.customerData})",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedCocoaText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = RichEspressoPrimary
-                ) {
-                    Text(
-                        text = order.displayOrderNumber,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = SoftGoldHighlight,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = color,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
-
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = timeFormatted,
-                style = MaterialTheme.typography.labelSmall,
-                color = MutedCocoaText
-            )
-
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 8.dp),
-                color = SubtleSandBorder.copy(alpha = 0.6f)
-            )
-
-            // Items List
-            if (items.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items.forEach { line ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${line.qty}x ${line.formattedTitle()}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = RichEspressoPrimary
-                                )
-                                val customText = line.formattedCustomization()
-                                if (customText.isNotBlank() && customText != "Tanpa Add-on" && customText != "Standar") {
-                                    Text(
-                                        text = "+ $customText",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MutedCocoaText
-                                    )
-                                }
-                            }
-
-                            val media = OrderMedia.fromLabel(order.orderMedia)
-                            Text(
-                                text = WaffleoViewModel.formatIdr(line.lineTotalFor(media)),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold,
-                                color = RichEspressoPrimary
-                            )
-                        }
-                    }
-                }
-            } else if (order.itemsSummary.isNotBlank()) {
-                Text(
-                    text = order.itemsSummary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = RichEspressoPrimary
+            if (!isLast) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(MutedCocoaText.copy(alpha = 0.25f))
                 )
             }
+        }
 
-            if (order.discountAmount > 0L) {
-                Spacer(modifier = Modifier.height(4.dp))
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = ElevatedIvoryCard,
+            border = BorderStroke(0.8.dp, SubtleSandBorder.copy(alpha = 0.6f)),
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = if (isLast) 0.dp else 4.dp)
+        ) {
+            Column(modifier = Modifier.padding(11.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Potongan Promo ${if (order.promoCode.isNotBlank()) "(${order.promoCode})" else ""}:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFDC2626)
-                    )
-                    Text(
-                        text = "-${WaffleoViewModel.formatIdr(order.discountAmount)}",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = sanitizeBranchIdsInText(event.title),
+                        style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFDC2626)
+                        color = RichEspressoPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = event.timeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedCocoaText
                     )
                 }
-            }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 8.dp),
-                color = SubtleSandBorder.copy(alpha = 0.6f)
-            )
-
-            // Bottom Total & Net Settlement
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
+                if (event.actorUsername.isNotBlank()) {
                     Text(
-                        text = if (isPlatform) "Total Pesanan" else "Total Bayar",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
+                        text = "Pelaksana: @${event.actorUsername}${if (event.actorRole.isNotBlank()) " (${event.actorRole})" else ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedCocoaText,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                if (event.description.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = sanitizeBranchIdsInText(event.description),
+                        style = MaterialTheme.typography.bodySmall,
                         color = RichEspressoPrimary
                     )
-                    if (isPlatform && platformFee > 0L) {
-                        Text(
-                            text = "Net Masuk BCA: ${WaffleoViewModel.formatIdr(netAmount)} (Potongan -${WaffleoViewModel.formatIdr(platformFee)})",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = channelColor
-                        )
-                    } else if (order.paymentMethod.contains("Cash + QRIS", ignoreCase = true)) {
-                        Text(
-                            text = "Tunai: ${WaffleoViewModel.formatIdr(order.splitCashAmount)} • QRIS: ${WaffleoViewModel.formatIdr(order.splitQrisAmount)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedCocoaText
-                        )
-                    }
                 }
-
-                Text(
-                    text = WaffleoViewModel.formatIdr(order.totalAmount),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = RichEspressoPrimary
-                )
             }
         }
     }

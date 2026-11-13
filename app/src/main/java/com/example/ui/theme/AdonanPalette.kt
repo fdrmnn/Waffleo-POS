@@ -167,6 +167,58 @@ fun CartLineItem.buildAnnotatedCartTitle(
 }
 
 /**
+ * Format judul pesanan 1 baris (single-line) untuk Format 2:
+ * Nama adonan (Flavour) diwarnai tebal sesuai palet adonan, diikuti topping utama secara horizontal.
+ */
+fun CartLineItem.buildAnnotatedCartTitleSingleLine(
+    baseColor: Color = RichEspressoPrimary,
+    baseWeight: FontWeight = FontWeight.SemiBold
+): AnnotatedString = buildAnnotatedString {
+    if (category == "Egg Waffle") {
+        val cleanFlavour = flavourName.substringBefore("(").trim().ifBlank { "Original" }
+        val flavourColor = AdonanPalette.getColorForFlavour(cleanFlavour)
+
+        withStyle(
+            SpanStyle(
+                color = flavourColor,
+                fontWeight = FontWeight.ExtraBold
+            )
+        ) {
+            append(cleanFlavour)
+        }
+        append(" ")
+
+        withStyle(
+            SpanStyle(
+                color = baseColor,
+                fontWeight = baseWeight
+            )
+        ) {
+            when {
+                isHalfHalf && secondaryItemName.isNotBlank() -> {
+                    append("1/2 $primaryItemName + 1/2 $secondaryItemName")
+                }
+                isDoubleTopping && secondaryItemName.isNotBlank() -> {
+                    append("$primaryItemName + $secondaryItemName")
+                }
+                else -> {
+                    append(primaryItemName)
+                }
+            }
+        }
+    } else {
+        withStyle(
+            SpanStyle(
+                color = baseColor,
+                fontWeight = baseWeight
+            )
+        ) {
+            append(primaryItemName)
+        }
+    }
+}
+
+/**
  * Helper untuk memformat baris teks pesanan mentah (fallback) menjadi AnnotatedString:
  * Kata pertama (Adonan) diwarnai sesuai palet rasa adonan.
  */

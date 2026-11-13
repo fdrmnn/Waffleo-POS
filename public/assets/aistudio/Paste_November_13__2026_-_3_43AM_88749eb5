@@ -1,0 +1,1015 @@
+# MASTER INSTRUCTION
+# COMPLETE INVENTORY / STOCK MANAGEMENT SYSTEM RESET, CLEANUP & DECOUPLING
+
+## 1. ROLE & RESPONSIBILITY
+
+Bertindaklah sebagai:
+
+1. Principal Software Architect.
+2. Senior Full-Stack Engineer.
+3. Firebase & Cloud Firestore Specialist.
+4. Database Architect.
+5. Data Migration & Data Cleanup Specialist.
+6. Offline-First & Synchronization Engineer.
+7. Software Reliability Engineer.
+8. QA & Regression Testing Engineer.
+
+Tugas Anda adalah melakukan PEROMBAKAN BERUPA RESET TOTAL terhadap seluruh sistem Inventory / Stock Management yang saat ini telah dibuat dalam aplikasi POS saya.
+
+Saya tidak puas dengan hasil implementasi sistem stok sebelumnya. Saya ingin menghapus dan membersihkan seluruh sistem tersebut, termasuk struktur kode, database khusus stok, relasi, integrasi, serta seluruh komponen yang berkaitan dengannya.
+
+Tujuannya adalah mengembalikan aplikasi ke kondisi seolah-olah sistem Inventory / Stock Management tersebut belum pernah dibuat atau diimplementasikan.
+
+**PERHATIAN: RESET INI HANYA BERLAKU UNTUK SISTEM STOK DAN SELURUH KERABATNYA. BUKAN RESET APLIKASI SECARA KESELURUHAN.**
+
+Data bisnis utama yang sudah ada harus dipertahankan.
+
+---
+
+# BAGIAN A — TUJUAN RESET TOTAL
+
+Lakukan pembersihan menyeluruh terhadap:
+
+- Inventory Management.
+- Stock Management.
+- Inventory Master Data yang dibuat khusus untuk sistem stok.
+- Stock Balance.
+- Inventory Movement.
+- Inventory Ledger.
+- Recipe Management yang dibuat khusus untuk integrasi stok.
+- Recipe-to-Inventory Mapping.
+- Batch Production.
+- Prepared Ingredient / Premix Management.
+- Stock Audit.
+- Stock Opname.
+- Stock Adjustment.
+- Stock Transfer.
+- Stock Receiving yang khusus digunakan sistem stok.
+- Unit Conversion yang khusus digunakan sistem stok.
+- Stock Costing.
+- Inventory Analytics.
+- Automatic Stock In.
+- Automatic Stock Out.
+- Automatic Ingredient Depletion.
+- Stock Reservation.
+- Inventory Synchronization.
+- Stock-related Cache.
+- Stock-related Offline Storage.
+- Stock-related Queue.
+- Seluruh integrasi stok pada modul lainnya.
+
+Hapus atau lepaskan seluruh komponen sistem stok yang sudah tidak dibutuhkan sehingga tidak ada lagi logika lama yang berjalan di belakang aplikasi.
+
+Saya ingin sistem stok benar-benar bersih sebelum nantinya saya memberikan instruksi baru untuk membangun sistem Inventory Management dari awal.
+
+Jangan mencoba mempertahankan atau memperbaiki sistem stok lama sebagai fondasi implementasi berikutnya.
+
+Jangan melakukan refactor stok lama lalu menganggapnya sudah menjadi sistem baru.
+
+**RESET TOTAL. CLEAN SLATE. NO LEGACY INVENTORY LOGIC.**
+
+---
+
+# BAGIAN B — DATA YANG WAJIB DILINDUNGI
+
+Ini adalah instruksi paling penting dan tidak boleh dilanggar.
+
+## 1. CLOUD FIRESTORE — ORDERS
+
+Seluruh data pesanan yang sudah tersimpan di Cloud Firestore wajib dipertahankan.
+
+JANGAN MENGHAPUS:
+- Orders.
+- Order documents.
+- Order items.
+- Riwayat pesanan.
+- Status pesanan.
+- Data pelanggan yang terhubung dengan pesanan.
+- Data harga.
+- Subtotal.
+- Diskon.
+- Pajak atau service charge jika ada.
+- Total transaksi.
+- Payment records.
+- Payment method.
+- Payment references.
+- Refund records.
+- Cancellation records.
+- Receipt information.
+- Data historis lainnya.
+- Seluruh subcollection yang merupakan bagian dari data pesanan.
+
+Jangan menghapus koleksi Orders.
+
+Jangan menghapus dokumen Order.
+
+Jangan menghapus subcollection Order.
+
+Jangan menghapus data historis transaksi.
+
+Jangan mengosongkan collection atau document hanya demi membersihkan field stok.
+
+Jangan mereset nomor pesanan.
+
+Jangan mengubah nominal pembayaran atau total transaksi yang sudah tersimpan.
+
+Jangan mengubah histori pesanan yang sudah ada.
+
+**DATA ORDERS ADALAH DATA BISNIS UTAMA YANG HARUS TETAP UTUH.**
+
+## 2. CLOUD FIRESTORE — MONEY MANAGER
+
+Seluruh data Money Manager juga wajib dipertahankan.
+
+JANGAN MENGHAPUS:
+- Income records.
+- Expense records.
+- Transaction history.
+- Kategori utama.
+- Subkategori.
+- Note.
+- Description.
+- Nominal transaksi.
+- Tanggal transaksi.
+- Payment information.
+- Supplier information jika memang sudah digunakan.
+- Bukti transaksi.
+- Lampiran.
+- Riwayat perubahan yang berkaitan dengan pencatatan keuangan.
+- Seluruh subcollection Money Manager.
+
+Jangan menghapus koleksi Money Manager.
+
+Jangan menghapus transaksi keuangan.
+
+Jangan menghapus kategori dan subkategori hanya karena pernah dipakai untuk integrasi stok.
+
+Jangan mengubah nominal pemasukan atau pengeluaran.
+
+Jangan mengubah Note atau Description.
+
+Jangan mengubah histori keuangan.
+
+**DATA MONEY MANAGER HARUS TETAP UTUH SEPERTI SEBELUM RESET.**
+
+## 3. DATA APLIKASI LAIN YANG TIDAK BERKAITAN DENGAN STOK
+
+Pertahankan juga data bisnis utama lainnya yang bukan milik sistem stok, termasuk jika relevan:
+
+- Menu.
+- Modifier.
+- Harga jual.
+- Pengaturan produk.
+- Cabang.
+- User.
+- Role dan Permission.
+- Data pelanggan.
+- Pengaturan aplikasi.
+- Data transaksi lainnya.
+
+Jangan menganggap seluruh data yang mempunyai nama atau relasi dengan inventory otomatis boleh dihapus.
+
+Periksa fungsi dan kepemilikan datanya terlebih dahulu.
+
+---
+
+# BAGIAN C — PENANGANAN KHUSUS FIELD STOK DI DALAM ORDERS DAN MONEY MANAGER
+
+Saya memahami bahwa implementasi sebelumnya mungkin telah menambahkan field khusus Inventory ke dalam dokumen Orders atau Money Manager.
+
+Contohnya dapat berupa:
+- inventoryItemId.
+- stockItemId.
+- inventoryMovementId.
+- recipeId.
+- recipeVersionId.
+- stockDeducted.
+- stockAdjustmentReference.
+- inventorySyncStatus.
+- stockReservation.
+- inventoryConsumption.
+- ingredientUsage.
+- productionReference.
+- field lain yang secara khusus dibuat untuk integrasi stok.
+
+Nama di atas hanya contoh. Identifikasi nama field berdasarkan source code dan struktur database aktual.
+
+Jika field khusus stok ditemukan di dalam dokumen Orders atau Money Manager:
+
+1. Jangan menghapus dokumen induknya.
+2. Jangan menghapus transaksi aslinya.
+3. Jangan menghapus informasi keuangan.
+4. Jangan menghapus informasi pesanan.
+5. Jangan menghapus data yang dibutuhkan untuk menampilkan histori bisnis.
+6. Tentukan apakah field tersebut benar-benar eksklusif untuk sistem stok.
+7. Jika terbukti hanya digunakan oleh sistem stok lama, lepaskan field atau relasinya secara selektif.
+8. Pertahankan seluruh field lain.
+9. Gunakan partial field update, bukan menimpa seluruh dokumen dengan objek baru.
+10. Simpan laporan perubahan sebelum dan sesudah pembersihan.
+
+Jika terdapat field yang kegunaannya belum jelas atau juga digunakan oleh modul non-stok, JANGAN menghapusnya sebelum dependensinya dipahami dan dampaknya diverifikasi.
+
+Jika ada data stok historis yang tertanam di dalam dokumen Orders atau Money Manager, laporkan secara terpisah dan identifikasi mana yang merupakan data inti dan mana yang merupakan metadata integrasi stok.
+
+Jangan melakukan penghapusan secara spekulatif.
+
+**PRINSIP: HAPUS SISTEM STOKNYA, BUKAN DATA PESANAN ATAU KEUANGANNYA.**
+
+---
+
+# BAGIAN D — AUDIT MENYELURUH SEBELUM PENGHAPUSAN
+
+Sebelum melakukan perubahan, lakukan inventarisasi seluruh komponen sistem stok yang telah dibuat.
+
+Periksa source code:
+
+- Components.
+- Pages.
+- Routes.
+- Hooks.
+- Services.
+- Repositories.
+- Stores.
+- State Management.
+- Context.
+- Models.
+- Types.
+- Interfaces.
+- Utilities.
+- API.
+- Cloud Functions.
+- Background Jobs.
+- Scheduled Jobs.
+- Event Handlers.
+- Firestore Listeners.
+- Synchronization Services.
+- Offline Database.
+- Local Storage.
+- IndexedDB.
+- SQLite.
+- Cache.
+- Service Workers.
+- Query Definitions.
+- Database Migrations.
+- Security Rules.
+- Firestore Indexes.
+- Storage Rules.
+- Storage Assets.
+- Dependencies.
+
+Identifikasi hubungan antar-komponen.
+
+Cari seluruh referensi yang berkaitan dengan:
+- Inventory.
+- Stock.
+- Ingredient.
+- Recipe.
+- Production.
+- Preparation.
+- Stock Movement.
+- Stock Balance.
+- Stock Audit.
+- Stock Sync.
+- Inventory Queue.
+- Recipe Consumption.
+
+Jangan hanya mencari berdasarkan nama file.
+
+Telusuri fungsi, impor, pemanggilan service, database paths, event, trigger, serta hubungan tidak langsung.
+
+Tujuannya adalah menemukan seluruh sistem stok yang benar-benar sudah terimplementasi, bukan hanya yang terlihat pada tampilan.
+
+---
+
+# BAGIAN E — FIRESTORE CLEANUP & CLOUD DATA RESET
+
+Lakukan pemeriksaan khusus terhadap Cloud Firestore.
+
+Identifikasi:
+1. Root collections khusus stok.
+2. Nested collections khusus stok.
+3. Subcollections.
+4. Stock documents.
+5. Inventory-specific fields.
+6. Stock-related references.
+7. Firestore listeners.
+8. Firestore triggers.
+9. Stock synchronization documents.
+10. Stock-related metadata.
+11. Indexes khusus stok.
+12. Security Rules khusus stok.
+
+## 1. Collection dan Document Ownership
+
+Kelompokkan setiap data menjadi:
+
+A. INVENTORY-EXCLUSIVE DATA
+
+Data yang hanya digunakan sistem stok.
+
+Contoh:
+- Inventory Items.
+- Stock Balances.
+- Inventory Movements.
+- Recipe Records khusus stok.
+- Production Batches.
+- Stock Audit Sessions.
+- Stock Adjustments.
+- Stock Sync Queues.
+
+Jika terbukti merupakan data eksklusif stok, data tersebut dapat dihapus setelah mendapat ACC.
+
+B. SHARED BUSINESS DATA
+
+Data yang digunakan oleh lebih dari satu modul.
+
+Contoh:
+- Orders.
+- Money Manager.
+- Menu.
+- Modifier.
+- Branch.
+- User.
+- Customers.
+
+Data ini tidak boleh dihapus.
+
+Jika hanya memiliki field atau referensi integrasi stok, lakukan penanganan field tersebut secara selektif setelah analisis.
+
+C. UNKNOWN OWNERSHIP
+
+Data yang kepemilikannya belum jelas.
+
+Jangan dihapus.
+
+Masukkan ke dalam laporan agar bisa ditinjau terlebih dahulu.
+
+## 2. Recursive Cleanup
+
+Periksa seluruh struktur subcollection.
+
+Jangan berasumsi bahwa menghapus dokumen induk berarti seluruh dokumen turunannya otomatis terhapus.
+
+Enumerasi seluruh dokumen dan subcollection terkait, kemudian rencanakan pembersihan rekursif.
+
+Pastikan tidak ada:
+- Orphaned documents.
+- Orphaned subcollections.
+- Stock references yang tertinggal.
+- Stock documents tersembunyi.
+- Data yang masih dapat dibaca oleh aplikasi.
+
+## 3. Jangan Menghapus Seluruh Firestore
+
+DILARANG:
+- Menghapus seluruh database Firestore.
+- Menghapus root collection yang berisi Orders.
+- Menghapus root collection yang berisi Money Manager.
+- Menghapus dokumen cabang.
+- Menghapus user.
+- Menghapus seluruh data aplikasi.
+- Menggunakan script reset database global.
+
+Pembersihan harus berdasarkan kepemilikan data secara tepat.
+
+Jika sebuah collection merupakan campuran antara data stok dan data non-stok, jangan hapus collection tersebut secara keseluruhan.
+
+Bersihkan hanya dokumen atau field khusus stok yang telah diidentifikasi secara pasti.
+
+## 4. Penghapusan dari lingkungan server yang aman
+
+Lakukan pembersihan database menggunakan mekanisme backend/server terpercaya yang sesuai dengan teknologi project.
+
+Jangan menggunakan prosedur penghapusan seluruh koleksi dari frontend aplikasi.
+
+Pembersihan harus memiliki:
+- Exact path list.
+- Validasi target.
+- Batch processing.
+- Error handling.
+- Retry.
+- Progress tracking.
+- Verification.
+- Logging hasil eksekusi.
+
+Tidak boleh melakukan mass deletion berdasarkan asumsi nama collection saja.
+
+---
+
+# BAGIAN F — HAPUS SELURUH LOGIKA INTEGRASI STOK
+
+Setelah seluruh dependensi dipetakan, lepaskan sistem stok dari modul lainnya.
+
+Contoh:
+
+## 1. Orders
+
+Hapus hanya:
+- Automatic stock deduction.
+- Inventory movement generation.
+- Recipe consumption trigger.
+- Stock reservation.
+- Stock availability validation yang khusus dibuat sistem stok.
+- Inventory sync event.
+- Stock update listener.
+- Stock-related order hooks.
+
+Pertahankan:
+- Order creation.
+- Order editing.
+- Order cancellation.
+- Order status.
+- Order calculation.
+- Customer information.
+- Payment integration.
+- Printing.
+- Existing business logic yang tidak terkait stok.
+
+Pastikan Orders tetap dapat berfungsi secara normal tanpa Inventory Management.
+
+## 2. Money Manager
+
+Hapus hanya:
+- Automatic inventory receiving.
+- Stock item mapping.
+- Automatic stock addition.
+- Inventory purchase integration.
+- Stock synchronization.
+- Inventory-related listeners.
+
+Pertahankan seluruh fungsi Money Manager.
+
+Semua transaksi pemasukan dan pengeluaran harus tetap dapat dibuat, diedit, dilihat, dan dikelola sesuai sistem lama.
+
+Pastikan tidak ada error ketika Money Manager digunakan tanpa sistem stok.
+
+## 3. Settings > Menu & Modifier
+
+Jika sebelumnya ada Recipe Mapping, Ingredient Mapping, atau konfigurasi stok:
+
+- Hapus integrasi yang khusus dibuat untuk inventory.
+- Pertahankan seluruh kategori Menu.
+- Pertahankan seluruh subkategori.
+- Pertahankan seluruh item Menu.
+- Pertahankan seluruh kategori Modifier.
+- Pertahankan seluruh subkategori Modifier.
+- Pertahankan seluruh item Modifier.
+- Pertahankan harga dan konfigurasi asli.
+
+Jangan menghapus data Menu dan Modifier hanya karena mempunyai relasi ke resep.
+
+## 4. Closing / Tutup Toko
+
+Hapus seluruh bagian khusus inventory, seperti:
+- Estimasi penggunaan bahan.
+- Stock reconciliation.
+- Stock adjustment.
+- Inventory consumption.
+- Recipe-based closing.
+- Inventory synchronization pada saat closing.
+
+Pertahankan proses Tutup Toko yang tidak berkaitan dengan stok.
+
+Jangan mengubah perhitungan keuangan atau laporan closing yang sudah ada.
+
+## 5. Modul lain
+
+Telusuri seluruh modul yang mungkin pernah dihubungkan dengan sistem stok.
+
+Putuskan hanya integrasi stoknya.
+
+Jangan sampai menghapus fungsi yang juga dibutuhkan oleh modul lain.
+
+---
+
+# BAGIAN G — OFFLINE STORAGE, CACHE & SYNCHRONIZATION CLEANUP
+
+Hapus seluruh penyimpanan lokal yang secara eksklusif dibuat untuk sistem stok.
+
+Termasuk jika ditemukan:
+- Inventory SQLite tables.
+- IndexedDB inventory stores.
+- Local storage stock keys.
+- Stock cache.
+- Inventory query cache.
+- Stock synchronization queue.
+- Pending stock uploads.
+- Pending stock downloads.
+- Inventory event queue.
+- Production queue.
+- Recipe cache.
+- Stock-related local snapshots.
+- Service worker cache khusus stok.
+- Background stock tasks.
+
+Namun:
+
+JANGAN menghapus seluruh local database aplikasi.
+
+JANGAN menghapus cache Orders.
+
+JANGAN menghapus cache Money Manager.
+
+JANGAN menghapus login session.
+
+JANGAN menghapus seluruh user preferences.
+
+JANGAN menghapus seluruh aplikasi offline data.
+
+Hapus hanya bagian yang khusus dimiliki sistem stok.
+
+Pastikan proses startup aplikasi tidak lagi mencoba menginisialisasi atau membaca sistem stok yang sudah dihapus.
+
+Pastikan tidak ada background synchronization yang masih mengirimkan data stok lama ke Cloud Firestore.
+
+Pastikan tidak ada antrean lama yang menghidupkan kembali struktur atau dokumen stok setelah reset.
+
+---
+
+# BAGIAN H — CLOUD FUNCTIONS, SECURITY RULES & DEPENDENCIES
+
+Periksa seluruh backend logic.
+
+Jika terdapat Cloud Functions atau triggers khusus stok:
+- Hapus fungsi stok yang sudah tidak digunakan.
+- Hapus trigger stok.
+- Hapus scheduled inventory jobs.
+- Hapus background processing stok.
+- Hapus stock synchronization handlers.
+
+Jika suatu Cloud Function memiliki fungsi campuran, jangan menghapus seluruh function.
+
+Lepaskan hanya bagian logic stok dan pertahankan fungsi lainnya.
+
+Periksa Firestore Security Rules.
+
+Hapus aturan khusus koleksi stok yang memang sudah tidak diperlukan.
+
+Namun, jangan sampai penghapusan aturan stok mengurangi atau merusak keamanan:
+- Orders.
+- Money Manager.
+- Users.
+- Branches.
+- Data bisnis lainnya.
+
+Periksa indexes.
+
+Hapus hanya index yang secara eksklusif digunakan sistem stok dan tidak digunakan oleh modul lain.
+
+Jika sebuah index digunakan bersama, pertahankan.
+
+Periksa dependencies.
+
+Hapus package atau library khusus stok hanya jika:
+- Tidak digunakan modul lain.
+- Tidak menjadi dependensi fitur aplikasi yang masih aktif.
+- Penghapusannya tidak menyebabkan build gagal.
+
+Jangan menghapus dependency bersama hanya karena pertama kali ditambahkan untuk mendukung fitur stok.
+
+---
+
+# BAGIAN I — STORAGE FILES & ASSETS
+
+Jika sistem stok menggunakan Cloud Storage atau file storage lokal, periksa:
+
+- Stock-related images.
+- Inventory attachments.
+- Production photos.
+- Stock audit photos.
+- Recipe attachments.
+- Inventory export files.
+- Stock reports.
+- Temporary inventory files.
+
+Hapus hanya file yang secara pasti merupakan milik sistem stok.
+
+Jangan menghapus:
+- Receipt images.
+- Bukti transaksi Money Manager.
+- Foto produk Menu.
+- Lampiran Orders.
+- File bisnis lainnya yang digunakan modul non-stok.
+
+Jika file memiliki penggunaan bersama atau kepemilikannya belum jelas, jangan hapus.
+
+---
+
+# BAGIAN J — FIRESTORE BACKUP & RECOVERY SAFEGUARD
+
+Sebelum penghapusan permanen:
+
+1. Identifikasi fasilitas backup yang digunakan.
+2. Buat atau verifikasi backup yang dapat digunakan untuk pemulihan.
+3. Catat database dan project yang menjadi target.
+4. Verifikasi bahwa backup berasal dari database yang benar.
+5. Pastikan data Orders dan Money Manager terlindungi.
+6. Dokumentasikan prosedur pemulihan jika terjadi kesalahan.
+
+Jangan pernah memulihkan seluruh backup secara langsung ke database produksi untuk membatalkan kesalahan reset tanpa menganalisis dampaknya.
+
+Perlu diperhatikan bahwa backup dapat tetap menyimpan snapshot data stok lama meskipun data aktif telah dihapus.
+
+Jangan menghapus backup database secara otomatis hanya untuk membuat sistem stok terlihat bersih, karena backup tersebut juga mungkin melindungi Orders dan Money Manager.
+
+Pisahkan:
+- Pembersihan data aktif.
+- Retensi backup.
+- Penghapusan backup lama.
+
+Jika backup lama masih memuat data stok, laporkan hal tersebut secara transparan.
+
+Jangan mengklaim bahwa data sudah terhapus dari semua backup jika belum dibuktikan.
+
+Penghapusan backup yang juga berisi data bisnis lain memerlukan instruksi dan keputusan tersendiri dari saya.
+
+---
+
+# BAGIAN K — IMPLEMENTATION PLAN & APPROVAL GATE
+
+Sebelum melakukan reset, kirim laporan lengkap kepada saya.
+
+Laporan harus berisi:
+
+## 1. Inventory System Mapping
+
+Daftar seluruh:
+- File stok.
+- Modul stok.
+- Collection Firestore.
+- Document paths.
+- Subcollections.
+- Local storage.
+- Cache.
+- Sync queue.
+- Cloud Functions.
+- Triggers.
+- Security Rules.
+- Indexes.
+- Dependencies.
+- Integrasi dengan Orders.
+- Integrasi dengan Money Manager.
+- Integrasi dengan Menu & Modifier.
+- Integrasi dengan Closing.
+
+## 2. Protected Data Mapping
+
+Tampilkan secara spesifik:
+- Collection Orders yang akan dilindungi.
+- Collection Money Manager yang akan dilindungi.
+- Dokumen terkait.
+- Subcollections terkait.
+- Field inti yang tidak boleh disentuh.
+- Field khusus stok yang mungkin perlu dibersihkan.
+
+Jangan menebak nama collection atau field.
+
+Gunakan struktur aktual yang ditemukan di project dan database.
+
+## 3. Deletion Plan
+
+Untuk setiap target pembersihan, tampilkan:
+- Path atau file.
+- Jenis data.
+- Alasan dihapus.
+- Jumlah dokumen jika diketahui.
+- Apakah memiliki subcollection.
+- Apakah digunakan modul lain.
+- Dampak jika dihapus.
+- Metode pembersihan.
+- Status verifikasi.
+
+Pisahkan:
+- Safe to Delete.
+- Safe to Modify Selectively.
+- Protected.
+- Unknown — Requires Review.
+
+## 4. Orders & Money Manager Protection Plan
+
+Jelaskan bagaimana data Orders dan Money Manager akan dipastikan tetap utuh.
+
+Tunjukkan secara spesifik bagaimana field stok di dalam dokumen tersebut akan ditangani tanpa memengaruhi field lainnya.
+
+## 5. Code Cleanup Plan
+
+Tampilkan daftar file atau komponen yang akan:
+- Dihapus.
+- Diubah.
+- Dipertahankan.
+- Dipisahkan dari integrasi stok.
+
+Jelaskan dampak terhadap aplikasi.
+
+## 6. Firestore Cleanup Plan
+
+Jelaskan:
+- Collection yang akan dihapus.
+- Subcollection yang akan dihapus.
+- Dokumen yang akan dihapus.
+- Field yang akan dihapus.
+- Data yang dipertahankan.
+- Backup.
+- Verifikasi.
+
+## 7. Regression Testing Plan
+
+Jelaskan bagaimana memastikan seluruh fungsi non-stok tetap berjalan.
+
+## 8. Rollback Plan
+
+Jelaskan prosedur pemulihan jika terjadi kegagalan.
+
+Prioritaskan pemulihan secara selektif dan perlindungan data bisnis.
+
+---
+
+# BAGIAN L — WAJIB MELAKUKAN DRY-RUN SEBELUM DESTRUCTIVE ACTION
+
+Sebelum penghapusan data aktif, lakukan simulasi atau dry-run.
+
+Dry-run harus:
+
+- Membaca target.
+- Menghitung jumlah dokumen.
+- Menampilkan collection dan subcollection.
+- Mengidentifikasi field yang akan dihapus.
+- Mengidentifikasi dokumen yang akan dipertahankan.
+- Memeriksa relasi.
+- Melaporkan kemungkinan dampak.
+- Tidak melakukan perubahan atau deletion.
+
+Buat exact allowlist untuk target penghapusan.
+
+Buat protected denylist untuk data yang dilarang disentuh.
+
+Minimal lindungi seluruh:
+- Orders.
+- Money Manager.
+- Payments.
+- Receipts.
+- Customers.
+- Users.
+- Branches.
+- Menu.
+- Modifier.
+- Business Settings.
+
+Jika terdapat data campuran, jangan menghapus seluruh dokumen atau collection.
+
+Hanya hapus bagian yang sudah teridentifikasi secara pasti sebagai milik sistem stok.
+
+Gunakan batch deletion yang aman sesuai skala data.
+
+Sediakan logging dan error handling.
+
+Jika satu tahap mengalami kegagalan, sistem tidak boleh melaporkan seluruh reset sebagai berhasil.
+
+**Dry-run wajib selesai dan hasilnya harus dapat saya periksa sebelum melakukan deletion aktual.**
+
+---
+
+# BAGIAN M — TUNGGU ACC SEBELUM PENGHAPUSAN
+
+Setelah semua pemetaan, analisis, backup verification, dry-run, dan Implementation Plan selesai:
+
+BERHENTI.
+
+Kirimkan laporan kepada saya.
+
+Jangan:
+- Menghapus collection.
+- Menghapus document.
+- Menghapus field.
+- Menghapus file.
+- Mengubah source code.
+- Mengubah Security Rules.
+- Mengubah database.
+- Menghapus local storage.
+- Menjalankan migration destruktif.
+- Melakukan reset apa pun.
+
+Tunggu ACC eksplisit dari saya.
+
+Jika saya meminta revisi, perbaiki rencananya terlebih dahulu.
+
+Jika saya memberikan ACC untuk sebagian scope, hanya kerjakan scope yang disetujui.
+
+---
+
+# BAGIAN N — EKSEKUSI RESET SETELAH ACC
+
+Setelah saya menyetujui rencana:
+
+## PHASE 1 — PROTECTED BACKUP
+
+Pastikan backup dan titik pemulihan sudah diverifikasi.
+
+Catat project ID, database ID, dan lingkungan yang menjadi target.
+
+Pastikan tidak menggunakan Firebase project yang salah.
+
+## PHASE 2 — DISABLE STOCK RUNTIME
+
+Hentikan seluruh proses stok lama:
+- Stock listeners.
+- Stock triggers.
+- Inventory sync.
+- Background jobs.
+- Automatic stock deductions.
+- Automatic stock additions.
+
+Pastikan proses Orders dan Money Manager tetap aktif.
+
+## PHASE 3 — CLEAN CLOUD FIRESTORE
+
+Hapus seluruh inventory-exclusive data menggunakan exact allowlist.
+
+Hapus nested collections secara menyeluruh.
+
+Lepaskan hanya inventory-specific fields dari shared business documents yang sudah disetujui.
+
+Jangan menghapus Orders dan Money Manager.
+
+## PHASE 4 — CLEAN LOCAL STORAGE
+
+Bersihkan inventory-specific local data.
+
+Pertahankan Orders, Money Manager, autentikasi, dan preferensi aplikasi lainnya.
+
+## PHASE 5 — REMOVE STOCK INTEGRATIONS
+
+Hapus kode dan layanan stok lama.
+
+Lepaskan integrasi stok dari Orders, Money Manager, Menu & Modifier, dan Closing.
+
+Pertahankan keseluruhan fungsi non-stok.
+
+## PHASE 6 — CLEAN BACKEND & CONFIGURATION
+
+Bersihkan:
+- Stock-only Cloud Functions.
+- Stock-only triggers.
+- Stock-only indexes.
+- Stock-only rules.
+- Stock-only scheduled jobs.
+- Stock-only dependencies jika aman.
+
+## PHASE 7 — BUILD & REGRESSION TEST
+
+Pastikan:
+- Aplikasi dapat dibangun.
+- Aplikasi dapat dibuka.
+- Tidak ada import error.
+- Tidak ada missing dependency.
+- Tidak ada Firestore listener ke collection stok yang telah dihapus.
+- Tidak ada stock initialization.
+- Tidak ada stock synchronization lama.
+- Orders berjalan normal.
+- Money Manager berjalan normal.
+- Menu & Modifier tetap tersedia.
+- Pembayaran berjalan normal.
+- Printing berjalan normal.
+- Closing non-stok berjalan normal.
+
+## PHASE 8 — FINAL VERIFICATION
+
+Lakukan pemeriksaan akhir terhadap:
+
+1. Cloud Firestore.
+2. Orders.
+3. Money Manager.
+4. Stock-only collections.
+5. Subcollections.
+6. Stock-related fields.
+7. Local storage.
+8. Cache.
+9. Synchronization queue.
+10. Cloud Functions.
+11. Security Rules.
+12. Source code references.
+13. Application runtime.
+14. Regression tests.
+
+Pastikan tidak ada sistem stok lama yang masih berjalan secara otomatis.
+
+---
+
+# BAGIAN O — FINAL ACCEPTANCE CRITERIA
+
+Reset hanya boleh dinyatakan selesai apabila:
+
+## Inventory Reset
+- Seluruh sistem stok lama sudah dilepas.
+- Tidak ada menu Inventory lama.
+- Tidak ada Stock Management lama.
+- Tidak ada Recipe-to-Inventory integration lama.
+- Tidak ada stock deduction otomatis lama.
+- Tidak ada stock addition otomatis lama.
+- Tidak ada stock movement lama yang masih aktif.
+- Tidak ada stock sync queue lama.
+- Tidak ada background stock process lama.
+- Tidak ada inventory-specific cache lama.
+- Tidak ada stock initialization otomatis saat aplikasi dibuka.
+- Tidak ada stock-only Cloud Firestore data yang tertinggal dalam cakupan reset yang telah disetujui.
+
+## Orders Protection
+- Seluruh Order documents tetap ada.
+- Seluruh Order history tetap ada.
+- Seluruh Order items tetap ada.
+- Seluruh Payment records tetap ada.
+- Seluruh Receipt information tetap ada.
+- Seluruh data inti Orders tetap utuh.
+- Orders dapat digunakan seperti sebelumnya tanpa error dari modul stok yang sudah dihapus.
+
+## Money Manager Protection
+- Seluruh income tetap ada.
+- Seluruh expense tetap ada.
+- Seluruh kategori tetap ada.
+- Seluruh subkategori tetap ada.
+- Seluruh Note tetap ada.
+- Seluruh Description tetap ada.
+- Seluruh nominal tetap sama.
+- Seluruh tanggal transaksi tetap sama.
+- Money Manager dapat digunakan seperti sebelumnya tanpa error dari integrasi stok yang sudah dihapus.
+
+## Other Modules Protection
+- Menu tetap ada.
+- Modifier tetap ada.
+- Branch tetap ada.
+- User tetap ada.
+- Role dan permission tetap ada.
+- Modul bisnis lainnya tetap berfungsi.
+
+## Application Clean State
+- Tidak ada error akibat penghapusan stok.
+- Tidak ada kode yang memanggil service stok yang sudah dihapus.
+- Tidak ada data stok lama yang otomatis muncul kembali.
+- Tidak ada integrasi stok yang terus berjalan di background.
+- Aplikasi siap menerima instruksi baru untuk membangun sistem stok dari awal.
+
+---
+
+# BAGIAN P — FINAL REPORT
+
+Setelah reset selesai, kirim laporan dengan format:
+
+1. Executive Summary.
+2. Seluruh sistem stok yang berhasil dihapus.
+3. Seluruh collection Firestore stok yang dibersihkan.
+4. Seluruh subcollection yang dibersihkan.
+5. Field stok yang dilepaskan dari Orders.
+6. Field stok yang dilepaskan dari Money Manager.
+7. Data Orders yang diverifikasi tetap aman.
+8. Data Money Manager yang diverifikasi tetap aman.
+9. Source code yang dihapus atau diubah.
+10. Cloud Functions dan triggers yang dibersihkan.
+11. Local storage dan cache yang dibersihkan.
+12. Security Rules dan indexes yang disesuaikan.
+13. Hasil build.
+14. Hasil regression testing.
+15. Verifikasi akhir.
+16. Bagian yang belum dapat dibersihkan atau diverifikasi.
+17. Keterbatasan backup dan data retention jika ada.
+
+Jangan memberikan klaim berhasil tanpa bukti.
+
+Bedakan:
+- SUCCESSFULLY DELETED.
+- SUCCESSFULLY MODIFIED.
+- SUCCESSFULLY PRESERVED.
+- NOT APPLICABLE.
+- NOT VERIFIED.
+- FAILED.
+
+Lampirkan ringkasan sebelum dan sesudah pembersihan dengan jumlah data dan referensi yang aman tanpa membocorkan informasi sensitif.
+
+---
+
+# FINAL COMMAND
+
+Saya tidak ingin memperbaiki sistem stok lama.
+
+Saya ingin menghapus seluruh sistem Inventory / Stock Management yang telah dibuat sebelumnya, termasuk seluruh integrasi dan komponen yang khusus berkaitan dengannya.
+
+Setelah pembersihan, aplikasi harus kembali ke kondisi bersih tanpa sistem stok lama.
+
+Tetapi seluruh data Orders dan Money Manager yang sudah tersimpan di Cloud Firestore WAJIB DIPERTAHANKAN.
+
+Jika harus menyentuh dokumen Orders atau Money Manager, hanya tangani field, relasi, atau metadata yang terbukti khusus milik sistem stok lama. Jangan mengubah data bisnis utamanya.
+
+Jangan menghapus database secara global.
+
+Jangan melakukan reset seluruh aplikasi.
+
+Jangan merusak data historis.
+
+Jangan mempertahankan logika stok lama sebagai fondasi sistem berikutnya.
+
+**RESET TOTAL SISTEM STOK. PERTAHANKAN DATA BISNIS. BERSIHKAN SELURUH INTEGRASI.**
+
+Setelah reset selesai, jangan langsung membuat sistem stok yang baru.
+
+Berhenti, kirim laporan hasil reset, dan tunggu instruksi baru dari saya.
+
+Saya akan memberikan spesifikasi dan pendekatan baru untuk pembangunan Inventory / Stock Management setelah kondisi aplikasi benar-benar bersih.

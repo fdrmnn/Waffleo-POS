@@ -227,9 +227,6 @@ class WaffleoRepositoryRuleTest : FirestoreEmulatorTestBase() {
             priceGrabFood = 31000L,
             priceGoFood = 31000L,
             priceShopeeFood = 30000L,
-            stockQty = 0.0,
-            stockUnit = "porsi",
-            costPerUnit = 11000L,
             metadataJson = "{}",
             isActive = true
         )

@@ -275,3 +275,46 @@ test("Audit logs are strictly append-only (create succeeds, update and delete fa
 
   await assertFails(logDoc.delete());
 });
+
+test("Catalog Phase 1 rules: MENU_ITEM without stock fields succeeds, INGREDIENT write fails", async () => {
+  const ownerDb = testEnv.authenticatedContext(OWNER_UID).firestore(DATABASE_ID);
+  const now = new Date();
+  const catCol = ownerDb.collection("users").doc(OWNER_UID).collection("catalog");
+
+  await assertSucceeds(
+    catCol.doc("menu_choco").set({
+      userId: OWNER_UID,
+      recordType: "MENU_ITEM",
+      branchId: "Global",
+      name: "Chocolate",
+      category: "Egg Waffle",
+      priceWalkIn: 18000,
+      priceGrabFood: 23000,
+      priceGoFood: 23000,
+      priceShopeeFood: 22000,
+      metadataJson: "{}",
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  await assertFails(
+    catCol.doc("ing_should_fail").set({
+      userId: OWNER_UID,
+      recordType: "INGREDIENT",
+      branchId: "Global",
+      name: "Tepung",
+      category: "RAW_MATERIAL",
+      priceWalkIn: 0,
+      priceGrabFood: 0,
+      priceGoFood: 0,
+      priceShopeeFood: 0,
+      metadataJson: "{}",
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+});
+

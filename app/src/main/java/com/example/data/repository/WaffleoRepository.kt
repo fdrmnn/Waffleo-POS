@@ -332,6 +332,11 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                 "createdBy" to order.createdBy,
                 "paymentLedgerPayload" to order.paymentLedgerPayload,
                 "orderTimelinePayload" to order.orderTimelinePayload,
+                "processingStage" to order.processingStage,
+                "historicalProducedItemsPayload" to order.historicalProducedItemsPayload,
+                "revisionCount" to order.revisionCount,
+                "overpaidAmount" to order.overpaidAmount,
+                "settlementStatus" to order.settlementStatus,
                 "createdAt" to (if (isNew) (order.createdAt ?: FieldValue.serverTimestamp()) else (order.createdAt ?: FieldValue.serverTimestamp())),
                 "updatedAt" to (order.updatedAt ?: FieldValue.serverTimestamp())
             )
@@ -363,9 +368,6 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
                 "priceGrabFood" to item.priceGrabFood,
                 "priceGoFood" to item.priceGoFood,
                 "priceShopeeFood" to item.priceShopeeFood,
-                "stockQty" to item.stockQty,
-                "stockUnit" to item.stockUnit,
-                "costPerUnit" to item.costPerUnit,
                 "metadataJson" to item.metadataJson.ifBlank { "{}" },
                 "imageUrl" to item.imageUrl,
                 "isActive" to item.isActive,
@@ -380,27 +382,6 @@ class WaffleoRepository(private val db: FirebaseFirestore) {
             ack == true
         } catch (e: Exception) {
             Log.e("WaffleoRepo", "Failed to save catalog item ${item.id}", e)
-            false
-        }
-    }
-
-    suspend fun adjustCatalogStockAtomic(userId: String, itemId: String, deltaQty: Double): Boolean {
-        if (userId.isEmpty() || itemId.isEmpty()) return false
-        return try {
-            val docRef = db.collection("users").document(userId).collection("catalog").document(itemId)
-            val task = docRef.update(
-                mapOf(
-                    "stockQty" to FieldValue.increment(deltaQty),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            )
-            val ack = withTimeoutOrNull(WRITE_TIMEOUT_MS) {
-                task.await()
-                true
-            }
-            ack == true
-        } catch (e: Exception) {
-            Log.w("WaffleoRepo", "Notice atomic stock update for $itemId (fallback to full upsert): ${e.message}")
             false
         }
     }

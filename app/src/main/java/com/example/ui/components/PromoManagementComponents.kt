@@ -89,6 +89,7 @@ import com.example.data.model.PromoQuantityTier
 import com.example.data.model.PromoStatus
 import com.example.data.model.PromoType
 import com.example.data.model.WaffleoPromoEngine
+import com.example.data.model.capitalizeSentenceStart
 import com.example.ui.theme.ChampagneGoldAccent
 import com.example.ui.theme.DeepCaramelGold
 import com.example.ui.theme.ElevatedIvoryCard
@@ -196,32 +197,57 @@ fun PromoManagementSection(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Filter Chips Row
+        // Filter Chips Row + In-Section Create Promo Action
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            filterTabs.forEach { (key, label) ->
-                val isSelected = selectedStatusFilter == key
-                Surface(
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                filterTabs.forEach { (key, label) ->
+                    val isSelected = selectedStatusFilter == key
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (isSelected) RichEspressoPrimary else ElevatedIvoryCard,
+                        border = BorderStroke(1.dp, if (isSelected) RichEspressoPrimary else SubtleSandBorder),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable { selectedStatusFilter = key }
+                            .testTag("promo_filter_$key")
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) SoftGoldHighlight else RichEspressoPrimary,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+
+            if (canEdit) {
+                Button(
+                    onClick = onCreateNewPromo,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = RichEspressoPrimary,
+                        contentColor = SoftGoldHighlight
+                    ),
                     shape = RoundedCornerShape(50),
-                    color = if (isSelected) RichEspressoPrimary else ElevatedIvoryCard,
-                    border = BorderStroke(1.dp, if (isSelected) RichEspressoPrimary else SubtleSandBorder),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .clickable { selectedStatusFilter = key }
-                        .testTag("promo_filter_$key")
+                        .height(36.dp)
+                        .testTag("promo_section_create_btn")
                 ) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) SoftGoldHighlight else RichEspressoPrimary,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-                    )
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Promo", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1274,18 +1300,19 @@ fun PromoFormModalDialog(
                         ) {
                             WaffleoSoftTextField(
                                 value = promoName,
-                                onValueChange = { promoName = it; validationError = null },
+                                onValueChange = { promoName = capitalizeSentenceStart(it); validationError = null },
                                 label = "Nama Promo *",
                                 placeholder = "Contoh: Paket Hemat Waffle + Drink",
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 modifier = Modifier.weight(0.55f),
                                 testTag = "promo_name_input"
                             )
                             WaffleoSoftTextField(
                                 value = description,
-                                onValueChange = { description = it },
+                                onValueChange = { description = capitalizeSentenceStart(it) },
                                 label = "Deskripsi Singkat",
                                 placeholder = "Contoh: 1 Waffle + 1 Minuman hanya Rp29.000",
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 modifier = Modifier.weight(0.45f),
                                 testTag = "promo_desc_input"
                             )
@@ -1379,10 +1406,11 @@ fun PromoFormModalDialog(
                                             WaffleoSoftTextField(
                                                 value = grp.groupName,
                                                 onValueChange = { newName ->
-                                                    bundleGroups[idx] = grp.copy(groupName = newName)
+                                                    bundleGroups[idx] = grp.copy(groupName = capitalizeSentenceStart(newName))
                                                 },
                                                 label = "Nama Kelompok #${idx + 1}",
                                                 placeholder = "Waffle / Minuman",
+                                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                                 modifier = Modifier.weight(0.55f)
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))

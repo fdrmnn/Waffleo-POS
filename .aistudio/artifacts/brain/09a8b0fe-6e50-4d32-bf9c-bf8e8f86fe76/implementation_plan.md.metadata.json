@@ -1,6 +1,0 @@
-{
-  "summary":  "Rencana Arsitektur & Rombak Total Sistem Pengelolaan Cabang (Branch Management Overhaul):\n\n1. Mengadopsi UUID v4 unik acak (branch_UUID) untuk setiap cabang baru agar terpisah 100% dari nama cabang.\n2. Mekanisme Full Permanent Purge pada Firestore Cloud, LocalStore (SQLite/Prefs), dan Pending Sync Queues.\n3. Deletion Fence permanen di Cloud & Lokal untuk memblokir kebangkitan data dari perangkat offline atau backup.\n4. Isolasi data ketat berbasis UUID pada POS, Dashboard, Orders, Order History, Erased History, Money Manager, dan Settings.\n5. Uji skenario lengkap pembuatan ulang cabang nama sama, pembersihan offline sync, dan verifikasi non-interferensi cabang lain.",
-  "updatedAt":  "2026-11-07T10:47:53.502964601Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

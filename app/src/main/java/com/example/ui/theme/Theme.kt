@@ -31,11 +31,11 @@ private val WaffleoColorScheme = lightColorScheme(
 )
 
 val WaffleoShapes = Shapes(
-    extraSmall = RoundedCornerShape(16.dp),
-    small = RoundedCornerShape(22.dp),
-    medium = RoundedCornerShape(26.dp),
-    large = RoundedCornerShape(32.dp),
-    extraLarge = RoundedCornerShape(50)
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(14.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(16.dp)
 )
 
 @Composable

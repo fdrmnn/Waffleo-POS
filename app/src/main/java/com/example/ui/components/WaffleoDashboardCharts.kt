@@ -23,13 +23,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.BakeryDining
 import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.LocalCafe
 import androidx.compose.material.icons.filled.LocalMall
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.QrCode2
@@ -100,7 +100,6 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
-import org.json.JSONObject
 
 enum class HourlyStatMode(val label: String) {
     MEAN("Mean"),
@@ -450,8 +449,8 @@ fun buildMonthlyDatesSalesSeries(
         val idx = d - 1
         PeriodSalesPoint(
             index = idx,
-            label = String.format("Tgl %02d", d),
-            fullLabel = "Tanggal $d",
+            label = String.format(Locale.US, "%02d", d),
+            fullLabel = String.format(Locale.US, "Tanggal %02d", d),
             grossRevenue = grossByDate[idx],
             netRevenue = netByDate[idx],
             orderCount = countByDate[idx]
@@ -655,8 +654,40 @@ fun buildCustomRangeMonthlySalesSeries(
     }
 }
 
+data class ExecutiveAovStats(
+    val averageOrderValue: Long,
+    val totalItems: Int,
+    val averageItemsPerOrder: Double,
+    val maxOrderValue: Long,
+    val minOrderValue: Long
+)
+
+fun computeExecutiveAovStats(doneOrders: List<OrderRecord>): ExecutiveAovStats {
+    if (doneOrders.isEmpty()) {
+        return ExecutiveAovStats(0L, 0, 0.0, 0L, 0L)
+    }
+    val totalOmzet = doneOrders.sumOf { it.totalAmount }
+    val totalItems = doneOrders.sumOf { ord ->
+        val parsed = ord.parsedLineItems
+        if (parsed.isNotEmpty()) parsed.sumOf { it.qty } else 1
+    }
+    val maxVal = doneOrders.maxOf { it.totalAmount }
+    val minVal = doneOrders.minOf { it.totalAmount }
+    return ExecutiveAovStats(
+        averageOrderValue = totalOmzet / doneOrders.size,
+        totalItems = totalItems,
+        averageItemsPerOrder = totalItems.toDouble() / doneOrders.size.toDouble(),
+        maxOrderValue = maxVal,
+        minOrderValue = minVal
+    )
+}
+
 /**
- * Modern Executive KPI Row with Icon Badges, Sparkline Accent Bar & Margin Pill
+ * Modern Executive KPI Row (Opsi A):
+ * 1. Total Omzet Penjualan
+ * 2. Pendapatan Bersih
+ * 3. Potongan Platform & Promo
+ * 4. Rata-rata per Pesanan (AOV)
  */
 @Composable
 fun ModernExecutiveKpiRow(
@@ -664,18 +695,28 @@ fun ModernExecutiveKpiRow(
     potonganPlatform: Long,
     totalDiskonPromo: Long = 0L,
     labaKotor: Long,
-    saldoBcaPlatform: Long,
-    saldoMandiriPlatform: Long,
     doneCount: Int,
+    totalItemsCount: Int = doneCount,
     onOmzetClick: (() -> Unit)? = null,
     onLabaKotorClick: (() -> Unit)? = null,
-    onBcaClick: (() -> Unit)? = null,
-    onMandiriClick: (() -> Unit)? = null
+    onDeductionsClick: (() -> Unit)? = null,
+    onAovClick: (() -> Unit)? = null
 ) {
     val grossBeforeDeductions = (omzetGross + totalDiskonPromo).coerceAtLeast(1L)
     val marginPct = if (omzetGross > 0L || totalDiskonPromo > 0L) {
         ((labaKotor.toDouble() / grossBeforeDeductions.toDouble()) * 100.0).roundToInt()
     } else 0
+    val totalDeductions = potonganPlatform + totalDiskonPromo
+    val deductionPct = if (omzetGross > 0L || totalDiskonPromo > 0L) {
+        ((totalDeductions.toDouble() / grossBeforeDeductions.toDouble()) * 100.0).roundToInt()
+    } else 0
+    val avgOrderValue = if (doneCount > 0) omzetGross / doneCount else 0L
+    val avgItemsPerOrder = if (doneCount > 0) totalItemsCount.toDouble() / doneCount.toDouble() else 0.0
+    val aovBadgeText = if (doneCount > 0) {
+        String.format(Locale.forLanguageTag("id-ID"), "%.1f item ↗", avgItemsPerOrder)
+    } else {
+        "0 item ↗"
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -693,7 +734,7 @@ fun ModernExecutiveKpiRow(
             modifier = Modifier.weight(1f)
         )
         ExecutiveKpiCard(
-            title = "Estimasi Laba Kotor",
+            title = "Pendapatan Bersih",
             value = WaffleoViewModel.formatIdr(labaKotor),
             badgeText = "Net $marginPct% ↗",
             subtitle = "",
@@ -704,25 +745,25 @@ fun ModernExecutiveKpiRow(
             modifier = Modifier.weight(1f)
         )
         ExecutiveKpiCard(
-            title = "Settlement Rekening BCA",
-            value = WaffleoViewModel.formatIdr(saldoBcaPlatform),
-            badgeText = "BCA Platform ↗",
+            title = "Potongan Platform & Promo",
+            value = WaffleoViewModel.formatIdr(totalDeductions),
+            badgeText = "Rasio $deductionPct% ↗",
             subtitle = "",
-            icon = Icons.Default.AccountBalance,
-            accentColor = DeepCaramelGold,
-            badgeBg = SoftGoldHighlight,
-            onClick = onBcaClick,
+            icon = Icons.Default.LocalOffer,
+            accentColor = HoneyAmberWarning,
+            badgeBg = SoftAmberBg,
+            onClick = onDeductionsClick,
             modifier = Modifier.weight(1f)
         )
         ExecutiveKpiCard(
-            title = "Settlement Rekening Mandiri",
-            value = WaffleoViewModel.formatIdr(saldoMandiriPlatform),
-            badgeText = "Mandiri QRIS ↗",
+            title = "Rata-rata per Pesanan",
+            value = WaffleoViewModel.formatIdr(avgOrderValue),
+            badgeText = aovBadgeText,
             subtitle = "",
-            icon = Icons.Default.AccountBalance,
-            accentColor = Color(0xFF003882),
-            badgeBg = Color(0xFFE8F0FE),
-            onClick = onMandiriClick,
+            icon = Icons.Default.Analytics,
+            accentColor = Color(0xFF1D4ED8),
+            badgeBg = Color(0xFFDBEAFE),
+            onClick = onAovClick,
             modifier = Modifier.weight(1f)
         )
     }
@@ -3492,138 +3533,6 @@ fun TopMenuPerformanceBarCard(
             catalog = catalog,
             onDismiss = { selectedProductForAnalysis = null }
         )
-    }
-}
-
-/**
- * Visual Capacity Gauge Card for Real-Time Recipe Ingredients Stock
- */
-@Composable
-fun IngredientStockGaugeCard(
-    ingredients: List<CatalogRecord>,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = ElevatedIvoryCard),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Diagram Kapasitas Stok Bahan Baku Resep (Real-Time)",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = RichEspressoPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Indikator visual persediaan bahan baku (otomatis terpotong saat pesanan di-klik Done!)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MutedCocoaText
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 2-Column Grid of Visual Stock Gauges
-            val chunked = remember(ingredients) { ingredients.chunked(2) }
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                chunked.forEach { rowItems ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        rowItems.forEach { ing ->
-                            val minStock = try {
-                                JSONObject(ing.metadataJson).optDouble("minStock", 300.0)
-                            } catch (e: Exception) {
-                                300.0
-                            }
-                            val targetCapacity = (minStock * 5.0).coerceAtLeast(1000.0)
-                            val fillRatio = (ing.stockQty / targetCapacity).toFloat().coerceIn(0.04f, 1f)
-                            val isLow = ing.stockQty <= minStock
-
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = SoftOatSurface.copy(alpha = 0.65f),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            if (isLow) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = "Stok Menipis",
-                                                    tint = TerracottaDanger,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(5.dp))
-                                            }
-                                            Text(
-                                                text = ing.name,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                fontWeight = FontWeight.Bold,
-                                                color = RichEspressoPrimary,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        Surface(
-                                            shape = RoundedCornerShape(50),
-                                            color = if (isLow) SoftAmberBg else SoftSageBg
-                                        ) {
-                                            Text(
-                                                text = "${ing.stockQty.toInt()} ${ing.stockUnit}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (isLow) TerracottaDanger else MatchaSageSuccess,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(7.dp)
-                                            .clip(RoundedCornerShape(50))
-                                            .background(ElevatedIvoryCard)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
-                                                .fillMaxWidth(fillRatio)
-                                                .clip(RoundedCornerShape(50))
-                                                .background(
-                                                    if (isLow) TerracottaDanger else MatchaSageSuccess
-                                                )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (rowItems.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

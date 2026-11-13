@@ -85,6 +85,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,6 +95,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import com.example.data.model.DefaultExpenseUnitGroups
+import com.example.data.model.ExpenseNoteMode
+import com.example.data.model.ExpenseSubCategoryInputConfig
 import com.example.data.model.MoneyAccountGroupDef
 import com.example.data.model.MoneyBookmarkRecord
 import com.example.data.model.MoneyCategoryDef
@@ -101,6 +107,10 @@ import com.example.data.model.MoneyRepetitionOption
 import com.example.data.model.MoneyTransactionRecord
 import com.example.data.model.MoneyTransactionType
 import com.example.data.model.StaffRole
+import com.example.data.model.capitalizeSentenceStart
+import com.example.data.model.formatExpensePrimaryHeadline
+import com.example.data.model.formatQuantityWithUnitDescription
+import com.example.data.model.parseQuantityAndUnitFromDescription
 import com.example.ui.theme.CaramelGold
 import com.example.ui.theme.ElevatedIvoryCard
 import com.example.ui.theme.HoneyCaramelAccent
@@ -163,6 +173,7 @@ fun MoneyManagerScreen(
     val selectedMonthKey by viewModel.moneySelectedMonthKey.collectAsStateWithLifecycle()
     val consolidateAll by viewModel.moneyConsolidateAllBranches.collectAsStateWithLifecycle()
     val dailyPosItemSummaryMap by viewModel.dailyPosItemSummaryMap.collectAsStateWithLifecycle()
+    val uiPrefs by viewModel.sessionUiPreferences.collectAsStateWithLifecycle()
 
     var activeMainTab by remember { mutableStateOf(MoneyMainTab.TRANS) }
     var activeTransSubView by remember { mutableStateOf(TransSubView.DAILY) }
@@ -175,6 +186,9 @@ fun MoneyManagerScreen(
     var showTransactionModal by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<MoneyTransactionRecord?>(null) }
     var prefillFromBookmark by remember { mutableStateOf<MoneyBookmarkRecord?>(null) }
+    var prefillDateKey by remember { mutableStateOf<String?>(null) }
+    var prefillTimeText by remember { mutableStateOf<String?>(null) }
+    var openedFromDateHeader by remember { mutableStateOf(false) }
 
     // Filter transactions for the selected month and optional search/account filter
     val monthTransactions = remember(allTransactions, selectedMonthKey, searchQuery, selectedAccountFilter) {
@@ -425,6 +439,9 @@ fun MoneyManagerScreen(
                                 onClick = {
                                     editingTransaction = null
                                     prefillFromBookmark = null
+                                    prefillDateKey = null
+                                    prefillTimeText = null
+                                    openedFromDateHeader = false
                                     showTransactionModal = true
                                 },
                                 shape = RoundedCornerShape(50),
@@ -537,10 +554,26 @@ fun MoneyManagerScreen(
                             viewModel.setMoneySelectedMonthKey(mKey)
                             activeTransSubView = TransSubView.DAILY
                         },
+                        onClickDateHeader = { clickedDateKey ->
+                            editingTransaction = null
+                            prefillFromBookmark = null
+                            prefillDateKey = clickedDateKey
+                            val nowTime = SimpleDateFormat("HH:mm", Locale.US).format(Date())
+                            prefillTimeText = WaffleoViewModel.resolveMoneyDateHeaderInitialTime(
+                                lastTimesByDate = uiPrefs.moneyDateHeaderLastTimes,
+                                dateKey = clickedDateKey,
+                                nowTimeText = nowTime
+                            )
+                            openedFromDateHeader = true
+                            showTransactionModal = true
+                        },
                         onClickTransaction = { tx ->
                             if (session.role.canEditOrDeleteMoneyManager) {
                                 editingTransaction = tx
                                 prefillFromBookmark = null
+                                prefillDateKey = null
+                                prefillTimeText = null
+                                openedFromDateHeader = false
                                 showTransactionModal = true
                             } else {
                                 viewModel.showBanner("Akses Supervisor: Hanya dapat melihat & menambah transaksi baru.")
@@ -560,6 +593,9 @@ fun MoneyManagerScreen(
                             if (session.role.canEditOrDeleteMoneyManager) {
                                 editingTransaction = tx
                                 prefillFromBookmark = null
+                                prefillDateKey = null
+                                prefillTimeText = null
+                                openedFromDateHeader = false
                                 showTransactionModal = true
                             } else {
                                 viewModel.showBanner("Akses Supervisor: Hanya dapat melihat & menambah transaksi baru.")
@@ -587,6 +623,9 @@ fun MoneyManagerScreen(
             onClick = {
                 editingTransaction = null
                 prefillFromBookmark = null
+                prefillDateKey = null
+                prefillTimeText = null
+                openedFromDateHeader = false
                 showTransactionModal = true
             },
             shape = CircleShape,
@@ -615,6 +654,9 @@ fun MoneyManagerScreen(
                     showBookmarksDialog = false
                     editingTransaction = null
                     prefillFromBookmark = bm
+                    prefillDateKey = null
+                    prefillTimeText = null
+                    openedFromDateHeader = false
                     showTransactionModal = true
                 },
                 onDeleteBookmark = { bmId ->
@@ -629,33 +671,51 @@ fun MoneyManagerScreen(
             MoneyTransactionFormDialog(
                 existingTransaction = editingTransaction,
                 prefillBookmark = prefillFromBookmark,
+                initialDateKey = prefillDateKey,
+                initialTimeText = prefillTimeText,
                 categories = categories,
                 accountGroups = accountGroups,
                 canDelete = session.role.canEditOrDeleteMoneyManager && editingTransaction != null,
                 defaultFeeAccountChoice = defaultFeeChoice,
                 onFeeAccountChoiceChange = { choice -> viewModel.saveLastTransferFeeAccountChoice(choice) },
-                getNoteSuggestions = { prefix -> viewModel.getMoneyNoteSuggestions(prefix) },
+                getNoteSuggestions = { prefix, cat, sub -> viewModel.getMoneyNoteSuggestions(prefix, cat, sub) },
+                resolveExpenseSubCategoryConfig = { cat, sub -> viewModel.resolveExpenseSubCategoryConfig(cat, sub) },
+                onSaveExpenseSubCategoryConfig = { cfg -> viewModel.saveExpenseSubCategoryConfig(cfg) },
                 getHistoricalTransferFeeConfig = { fromAcc, toAcc -> viewModel.getHistoricalTransferFeeConfig(fromAcc, toAcc) },
                 onDismiss = {
                     showTransactionModal = false
                     editingTransaction = null
                     prefillFromBookmark = null
+                    prefillDateKey = null
+                    prefillTimeText = null
+                    openedFromDateHeader = false
                 },
                 onSaveTransaction = { txRecord, keepOpenForNext ->
                     viewModel.saveOrUpdateMoneyTransaction(txRecord)
+                    if (openedFromDateHeader) {
+                        viewModel.setMoneyDateHeaderLastTime(txRecord.dateKey, txRecord.timeText)
+                    }
                     if (!keepOpenForNext) {
                         showTransactionModal = false
                         editingTransaction = null
                         prefillFromBookmark = null
+                        prefillDateKey = null
+                        prefillTimeText = null
+                        openedFromDateHeader = false
                     } else {
                         editingTransaction = null
                         prefillFromBookmark = null
+                        prefillDateKey = txRecord.dateKey
+                        prefillTimeText = txRecord.timeText
                     }
                 },
                 onDeleteTransaction = { txId ->
                     viewModel.deleteMoneyTransaction(txId)
                     showTransactionModal = false
                     editingTransaction = null
+                    prefillDateKey = null
+                    prefillTimeText = null
+                    openedFromDateHeader = false
                 },
                 onSaveAsBookmark = { bmRecord ->
                     viewModel.saveMoneyBookmark(bmRecord)
@@ -682,6 +742,7 @@ private fun MoneyTransactionsTabContent(
     canEditOrDelete: Boolean,
     dailyPosItemSummaryMap: Map<String, String> = emptyMap(),
     onSelectMonthFromMonthlyView: (String) -> Unit,
+    onClickDateHeader: (String) -> Unit = {},
     onClickTransaction: (MoneyTransactionRecord) -> Unit
 ) {
     Column(
@@ -828,88 +889,115 @@ private fun MoneyTransactionsTabContent(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(modifier = Modifier.fillMaxWidth()) {
-                                    // Date Header Bar (e.g. "31  Sat  10.2026" | Blue Day Income | Red Day Expense)
-                                    Row(
+                                    // Clickable Date Header Group (Date Header Bar + POS Summary Sub-bar)
+                                    Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .background(SoftOatSurface.copy(alpha = 0.7f))
-                                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                            .clickable(
+                                                onClickLabel = "Tambah transaksi pada tanggal $dateKey"
+                                            ) { onClickDateHeader(dateKey) }
+                                            .testTag("mm_date_header_$dateKey")
                                     ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            val (dayNum, dayOfWeekText, monthYearDot) = parseDateHeaderParts(dateKey)
-                                            Text(
-                                                text = dayNum,
-                                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                                color = RichEspressoPrimary
-                                            )
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = when (dayOfWeekText) {
-                                                    "Sun" -> MoneyExpenseRed
-                                                    "Sat" -> MoneyIncomeBlue
-                                                    else -> MutedCocoaText.copy(alpha = 0.25f)
-                                                }
-                                            ) {
-                                                Text(
-                                                    text = dayOfWeekText,
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                    color = if (dayOfWeekText == "Sun" || dayOfWeekText == "Sat") Color.White else RichEspressoPrimary,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                )
-                                            }
-                                            Text(
-                                                text = monthYearDot,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MutedCocoaText
-                                            )
-                                        }
-
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(18.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = WaffleoViewModel.formatIdr(dayIncome),
-                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                                                color = MoneyIncomeBlue
-                                            )
-                                            Text(
-                                                text = WaffleoViewModel.formatIdr(dayExpense),
-                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                                                color = MoneyExpenseRed
-                                            )
-                                        }
-                                    }
-
-                                    // Daily POS Items & Orders Summary Sub-bar (e.g. "• 8 Pesanan : 24 Waffle, 1 Puding")
-                                    val dailyPosSummary = dailyPosItemSummaryMap[dateKey]
-                                    if (!dailyPosSummary.isNullOrBlank()) {
+                                        // Date Header Bar (e.g. "31  Sat  10.2026" | Blue Day Income | Red Day Expense)
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .background(SoftOatSurface.copy(alpha = 0.45f))
-                                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                                                .background(SoftOatSurface.copy(alpha = 0.7f))
+                                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Surface(
-                                                shape = RoundedCornerShape(50),
-                                                color = SoftGoldHighlight,
-                                                border = BorderStroke(0.5.dp, HoneyCaramelAccent.copy(alpha = 0.4f))
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                val (dayNum, dayOfWeekText, monthYearDot) = parseDateHeaderParts(dateKey)
+                                                Text(
+                                                    text = dayNum,
+                                                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                    color = RichEspressoPrimary
+                                                )
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = when (dayOfWeekText) {
+                                                        "Sun" -> MoneyExpenseRed
+                                                        "Sat" -> MoneyIncomeBlue
+                                                        else -> MutedCocoaText.copy(alpha = 0.25f)
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        text = dayOfWeekText,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = if (dayOfWeekText == "Sun" || dayOfWeekText == "Sat") Color.White else RichEspressoPrimary,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                Text(
+                                                    text = monthYearDot,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MutedCocoaText
+                                                )
+                                                Surface(
+                                                    shape = RoundedCornerShape(50),
+                                                    color = ElevatedIvoryCard,
+                                                    border = BorderStroke(0.8.dp, SubtleSandBorder)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Add,
+                                                            contentDescription = "Tambah Transaksi",
+                                                            tint = RichEspressoPrimary.copy(alpha = 0.75f),
+                                                            modifier = Modifier.size(12.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    text = dailyPosSummary,
-                                                    style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 11.sp
-                                                    ),
-                                                    color = RichEspressoPrimary,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    text = WaffleoViewModel.formatIdr(dayIncome),
+                                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                                    color = MoneyIncomeBlue
                                                 )
+                                                Text(
+                                                    text = WaffleoViewModel.formatIdr(dayExpense),
+                                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                                    color = MoneyExpenseRed
+                                                )
+                                            }
+                                        }
+
+                                        // Daily POS Items & Orders Summary Sub-bar (e.g. "• 8 Pesanan : 24 Waffle, 1 Puding")
+                                        val dailyPosSummary = dailyPosItemSummaryMap[dateKey]
+                                        if (!dailyPosSummary.isNullOrBlank()) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(SoftOatSurface.copy(alpha = 0.45f))
+                                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(50),
+                                                    color = SoftGoldHighlight,
+                                                    border = BorderStroke(0.5.dp, HoneyCaramelAccent.copy(alpha = 0.4f))
+                                                ) {
+                                                    Text(
+                                                        text = dailyPosSummary,
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 11.sp
+                                                        ),
+                                                        color = RichEspressoPrimary,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1016,7 +1104,7 @@ private fun MoneyTransactionRowItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left: Category + Sub-category
+        // Left: Category (+ Sub-category only for Income; for Expense, Sub-category is placed alongside Note/Merk)
         Column(modifier = Modifier.width(185.dp)) {
             Text(
                 text = if (tx.type == MoneyTransactionType.TRANSFER) "⇄ Transfer" else tx.categoryName,
@@ -1025,7 +1113,7 @@ private fun MoneyTransactionRowItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (tx.type != MoneyTransactionType.TRANSFER && tx.subCategoryName.isNotBlank()) {
+            if (tx.type == MoneyTransactionType.INCOME && tx.subCategoryName.isNotBlank()) {
                 Text(
                     text = tx.subCategoryName,
                     style = MaterialTheme.typography.bodySmall,
@@ -1042,7 +1130,7 @@ private fun MoneyTransactionRowItem(
             }
         }
 
-        // Center: Bold Note + Description + Account Route + Tag
+        // Center: For Expense -> "Sub-Kategori - Note/Merk" on top, "Account • Description" below
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -1053,11 +1141,17 @@ private fun MoneyTransactionRowItem(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                val centerPrimaryText = when (tx.type) {
+                    MoneyTransactionType.EXPENSE -> formatExpensePrimaryHeadline(
+                        subCategoryName = tx.subCategoryName,
+                        note = tx.note,
+                        categoryName = tx.categoryName
+                    )
+                    MoneyTransactionType.TRANSFER -> tx.note.ifBlank { "${tx.accountName} → ${tx.toAccountName}" }
+                    MoneyTransactionType.INCOME -> tx.note.ifBlank { tx.subCategoryName.ifBlank { tx.categoryName } }
+                }
                 Text(
-                    text = tx.note.ifBlank {
-                        if (tx.type == MoneyTransactionType.TRANSFER) "${tx.accountName} → ${tx.toAccountName}"
-                        else tx.subCategoryName.ifBlank { tx.categoryName }
-                    },
+                    text = centerPrimaryText,
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = RichEspressoPrimary,
                     maxLines = 1,
@@ -1724,13 +1818,21 @@ private fun MoneyStatsTabContent(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
+                                        val statsRowTitle = if (tx.type == MoneyTransactionType.EXPENSE) {
+                                            formatExpensePrimaryHeadline(tx.subCategoryName, tx.note, tx.categoryName)
+                                        } else {
+                                            "${tx.note.ifBlank { tx.subCategoryName }} (${tx.subCategoryName.ifBlank { tx.categoryName }})"
+                                        }
                                         Text(
-                                            text = "${tx.note.ifBlank { tx.subCategoryName }} (${tx.subCategoryName.ifBlank { tx.categoryName }})",
+                                            text = statsRowTitle,
                                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                                             color = RichEspressoPrimary
                                         )
                                         Text(
-                                            text = "${tx.dateKey} • ${tx.accountName}",
+                                            text = buildString {
+                                                append("${tx.dateKey} • ${tx.accountName}")
+                                                if (tx.description.isNotBlank()) append(" • ${tx.description}")
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MutedCocoaText
                                         )
@@ -2090,19 +2192,24 @@ private enum class ActiveOverlayPicker {
     ACCOUNT_TRANSFER_TO,
     REPETITION,
     AMOUNT_CALCULATOR,
-    FEE_CALCULATOR
+    FEE_CALCULATOR,
+    EXPENSE_UNIT
 }
 
 @Composable
 private fun MoneyTransactionFormDialog(
     existingTransaction: MoneyTransactionRecord?,
     prefillBookmark: MoneyBookmarkRecord?,
+    initialDateKey: String? = null,
+    initialTimeText: String? = null,
     categories: List<MoneyCategoryDef>,
     accountGroups: List<MoneyAccountGroupDef>,
     canDelete: Boolean,
     defaultFeeAccountChoice: String = "FROM",
     onFeeAccountChoiceChange: (String) -> Unit = {},
-    getNoteSuggestions: (String) -> List<String>,
+    getNoteSuggestions: (String, String, String) -> List<String>,
+    resolveExpenseSubCategoryConfig: (String, String) -> ExpenseSubCategoryInputConfig? = { _, _ -> null },
+    onSaveExpenseSubCategoryConfig: (ExpenseSubCategoryInputConfig) -> Unit = {},
     getHistoricalTransferFeeConfig: (String, String) -> WaffleoViewModel.TransferFeeHistoryConfig? = { _, _ -> null },
     onDismiss: () -> Unit,
     onSaveTransaction: (MoneyTransactionRecord, Boolean) -> Unit,
@@ -2123,12 +2230,13 @@ private fun MoneyTransactionFormDialog(
 
     val context = LocalContext.current
 
-    // Notice: When opened from a Bookmark, Date & Time are set to the current moment when clicked!
-    var dateKey by remember {
-        mutableStateOf(existingTransaction?.dateKey ?: defaultDateKey)
+    // Notice: When opened from a Date Header, Date & Time are prefilled from header date + last-used time for that date.
+    // When opened from a Bookmark or + Input, Date & Time are set to the current moment!
+    var dateKey by remember(existingTransaction?.id, prefillBookmark?.id, initialDateKey) {
+        mutableStateOf(existingTransaction?.dateKey ?: initialDateKey ?: defaultDateKey)
     }
-    var timeText by remember {
-        mutableStateOf(existingTransaction?.timeText ?: defaultTimeText)
+    var timeText by remember(existingTransaction?.id, prefillBookmark?.id, initialTimeText) {
+        mutableStateOf(existingTransaction?.timeText ?: initialTimeText ?: defaultTimeText)
     }
 
     val formattedDateDisplay = remember(dateKey) {
@@ -2319,14 +2427,62 @@ private fun MoneyTransactionFormDialog(
         )
     }
 
+    val initialDescriptionRaw = existingTransaction?.description ?: prefillBookmark?.description ?: ""
+    val initialParsedQtyUnit = remember(existingTransaction?.id, prefillBookmark?.id) {
+        parseQuantityAndUnitFromDescription(initialDescriptionRaw)
+    }
+    val initialSubCatConfig = remember(existingTransaction?.id, prefillBookmark?.id) {
+        val initCat = existingTransaction?.categoryName ?: prefillBookmark?.categoryName ?: ""
+        val initSub = existingTransaction?.subCategoryName ?: prefillBookmark?.subCategoryName ?: ""
+        if (initCat.isNotBlank()) resolveExpenseSubCategoryConfig(initCat, initSub) else null
+    }
+
+    var expenseNoteMode by remember(existingTransaction?.id, prefillBookmark?.id) {
+        mutableStateOf(
+            initialSubCatConfig?.noteMode
+                ?: if (existingTransaction != null &&
+                    existingTransaction.type == MoneyTransactionType.EXPENSE &&
+                    existingTransaction.subCategoryName.isNotBlank() &&
+                    existingTransaction.note.isNotBlank() &&
+                    !existingTransaction.note.equals(existingTransaction.subCategoryName, ignoreCase = true)
+                ) {
+                    ExpenseNoteMode.MERK
+                } else {
+                    ExpenseNoteMode.NOTE
+                }
+        )
+    }
+    var showNoteModePopup by remember { mutableStateOf(false) }
+
+    var isUnitDescriptionChecked by remember(existingTransaction?.id, prefillBookmark?.id) {
+        mutableStateOf(
+            when {
+                initialParsedQtyUnit != null -> true
+                existingTransaction != null && existingTransaction.description.isNotBlank() -> false
+                initialSubCatConfig != null -> initialSubCatConfig.isUnitDescriptionEnabled
+                else -> false
+            }
+        )
+    }
+    var selectedUnitSymbol by remember(existingTransaction?.id, prefillBookmark?.id) {
+        mutableStateOf(
+            initialParsedQtyUnit?.second
+                ?: initialSubCatConfig?.unitSymbol
+                ?: "kg"
+        )
+    }
+    var unitQuantityText by remember(existingTransaction?.id, prefillBookmark?.id) {
+        mutableStateOf(initialParsedQtyUnit?.first ?: "")
+    }
+
     var activePicker by remember { mutableStateOf(ActiveOverlayPicker.NONE) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    val noteSuggestions = remember(noteText, noteSuggestionsDismissedForText) {
+    val noteSuggestions = remember(noteText, noteSuggestionsDismissedForText, selectedCategoryName, selectedSubCategoryName) {
         if (noteText.isBlank() || noteText == noteSuggestionsDismissedForText) {
             emptyList()
         } else {
-            getNoteSuggestions(noteText)
+            getNoteSuggestions(noteText, selectedCategoryName, selectedSubCategoryName)
         }
     }
 
@@ -2908,32 +3064,165 @@ private fun MoneyTransactionFormDialog(
                             }
                         }
 
-                        // ROW E: NOTE WITH PREFIX AUTO-COMPLETE OVERLAY (Typing "F" or "Fort" suggests "Fortune", etc.)
+                        // ROW E: NOTE / MERK WITH INTERACTIVE POPUP SELECTOR & PREFIX AUTO-COMPLETE OVERLAY
                         Box(modifier = Modifier.fillMaxWidth().zIndex(10f)) {
                             Column(modifier = Modifier.fillMaxWidth()) {
-                                FormRowContainer(label = "Note") {
-                                    OutlinedTextField(
-                                        value = noteText,
-                                        onValueChange = {
-                                            noteText = it
-                                            noteSuggestionsDismissedForText = ""
-                                        },
-                                        placeholder = { Text("Ketik nama item/catatan (mis. Fortune, Sunco, 2 Kg)...") },
-                                        singleLine = true,
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = OutlinedTextFieldDefaults.colors(
-                                            focusedContainerColor = SoftOatSurface,
-                                            unfocusedContainerColor = SoftOatSurface,
-                                            focusedBorderColor = activeAccentColor,
-                                            unfocusedBorderColor = SubtleSandBorder
-                                        ),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("mm_note_input")
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(modifier = Modifier.width(82.dp)) {
+                                        if (txType == MoneyTransactionType.EXPENSE) {
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = if (expenseNoteMode == ExpenseNoteMode.MERK) SoftGoldHighlight else SoftOatSurface,
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    if (expenseNoteMode == ExpenseNoteMode.MERK) HoneyCaramelAccent else SubtleSandBorder
+                                                ),
+                                                modifier = Modifier
+                                                    .padding(end = 6.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .clickable { showNoteModePopup = true }
+                                                    .testTag("mm_note_mode_btn")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "${expenseNoteMode.label} ▾",
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = RichEspressoPrimary,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+
+                                            DropdownMenu(
+                                                expanded = showNoteModePopup,
+                                                onDismissRequest = { showNoteModePopup = false },
+                                                modifier = Modifier
+                                                    .background(ElevatedIvoryCard)
+                                                    .border(1.dp, HoneyCaramelAccent, RoundedCornerShape(12.dp))
+                                            ) {
+                                                Text(
+                                                    text = "Pilih Mode Input (Note / Merk)",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = MutedCocoaText,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                                )
+                                                ExpenseNoteMode.entries.forEach { modeOption ->
+                                                    val isSelectedMode = expenseNoteMode == modeOption
+                                                    DropdownMenuItem(
+                                                        text = {
+                                                            Column {
+                                                                Text(
+                                                                    text = modeOption.label,
+                                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                                        fontWeight = if (isSelectedMode) FontWeight.Bold else FontWeight.Medium
+                                                                    ),
+                                                                    color = RichEspressoPrimary
+                                                                )
+                                                                Text(
+                                                                    text = if (modeOption == ExpenseNoteMode.MERK) {
+                                                                        val targetSub = selectedSubCategoryName.ifBlank { selectedCategoryName.ifBlank { "Sub-Kategori" } }
+                                                                        "Isi merk item $targetSub"
+                                                                    } else {
+                                                                        "Catatan pengeluaran biasa"
+                                                                    },
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = MutedCocoaText
+                                                                )
+                                                            }
+                                                        },
+                                                        trailingIcon = {
+                                                            if (isSelectedMode) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.Check,
+                                                                    contentDescription = null,
+                                                                    tint = MoneyExpenseRed,
+                                                                    modifier = Modifier.size(16.dp)
+                                                                )
+                                                            }
+                                                        },
+                                                        onClick = {
+                                                            expenseNoteMode = modeOption
+                                                            showNoteModePopup = false
+                                                            if (selectedCategoryName.isNotBlank()) {
+                                                                onSaveExpenseSubCategoryConfig(
+                                                                    ExpenseSubCategoryInputConfig(
+                                                                        categoryName = selectedCategoryName,
+                                                                        subCategoryName = selectedSubCategoryName,
+                                                                        noteMode = modeOption,
+                                                                        isUnitDescriptionEnabled = isUnitDescriptionChecked,
+                                                                        unitSymbol = selectedUnitSymbol
+                                                                    )
+                                                                )
+                                                            }
+                                                        },
+                                                        modifier = Modifier.testTag("mm_note_mode_option_${modeOption.name}")
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            Text(
+                                                text = "Note",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MutedCocoaText
+                                            )
+                                        }
+                                    }
+
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        val notePlaceholder = if (txType == MoneyTransactionType.EXPENSE && expenseNoteMode == ExpenseNoteMode.MERK) {
+                                            val subTarget = selectedSubCategoryName.ifBlank { selectedCategoryName.ifBlank { "item" } }
+                                            "Ketik merk $subTarget (mis. Omela, Goldenfill, Sunco)..."
+                                        } else {
+                                            "Ketik nama item/catatan (mis. Listrik, Plastik, Sewa)..."
+                                        }
+                                        OutlinedTextField(
+                                            value = noteText,
+                                            onValueChange = {
+                                                noteText = capitalizeSentenceStart(it)
+                                                noteSuggestionsDismissedForText = ""
+                                            },
+                                            placeholder = { Text(notePlaceholder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                            trailingIcon = if (txType == MoneyTransactionType.EXPENSE && expenseNoteMode == ExpenseNoteMode.MERK && selectedSubCategoryName.isNotBlank()) {
+                                                {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = SoftGoldHighlight,
+                                                        border = BorderStroke(1.dp, HoneyCaramelAccent.copy(alpha = 0.6f)),
+                                                        modifier = Modifier.padding(end = 6.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "Merk",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                            color = RichEspressoPrimary,
+                                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                        )
+                                                    }
+                                                }
+                                            } else null,
+                                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedContainerColor = SoftOatSurface,
+                                                unfocusedContainerColor = SoftOatSurface,
+                                                focusedBorderColor = activeAccentColor,
+                                                unfocusedBorderColor = SubtleSandBorder
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("mm_note_input")
+                                        )
+                                    }
                                 }
 
-                                // Floating Auto-Complete Suggestion List when typing prefix in Note
+                                // Floating Auto-Complete Suggestion List when typing prefix in Note/Merk
                                 if (noteSuggestions.isNotEmpty()) {
                                     Surface(
                                         shape = RoundedCornerShape(14.dp),
@@ -2942,7 +3231,7 @@ private fun MoneyTransactionFormDialog(
                                         shadowElevation = 10.dp,
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(start = 95.dp, top = 4.dp)
+                                            .padding(start = 82.dp, top = 4.dp)
                                     ) {
                                         Column(modifier = Modifier.padding(8.dp)) {
                                             Row(
@@ -2952,8 +3241,9 @@ private fun MoneyTransactionFormDialog(
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
+                                                val modeTitle = if (txType == MoneyTransactionType.EXPENSE) expenseNoteMode.label else "Note"
                                                 Text(
-                                                    text = "Riwayat Note berawalan \"${noteText.trim()}\" (Klik untuk pilih cepat):",
+                                                    text = "Riwayat $modeTitle berawalan \"${noteText.trim()}\" (Klik untuk pilih cepat):",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = HoneyCaramelAccent
                                                 )
@@ -3026,8 +3316,9 @@ private fun MoneyTransactionFormDialog(
                                 if (showTagInput) {
                                     OutlinedTextField(
                                         value = tagText,
-                                        onValueChange = { tagText = it },
+                                        onValueChange = { tagText = capitalizeSentenceStart(it) },
                                         placeholder = { Text("Nama Tag...") },
+                                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                         singleLine = true,
                                         shape = RoundedCornerShape(10.dp),
                                         modifier = Modifier
@@ -3038,27 +3329,194 @@ private fun MoneyTransactionFormDialog(
                             }
                         }
 
-                        // ROW G: DESCRIPTION ROW (Distinct from Tag)
+                        // ROW G: DESCRIPTION ROW (With Unit Selector + Checkmark Toggle for Expense)
                         FormRowContainer(label = "Description") {
-                            OutlinedTextField(
-                                value = descriptionText,
-                                onValueChange = { descriptionText = it },
-                                placeholder = { Text("Keterangan tambahan...") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = SoftOatSurface,
-                                    unfocusedContainerColor = SoftOatSurface,
-                                    focusedBorderColor = activeAccentColor,
-                                    unfocusedBorderColor = SubtleSandBorder
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("mm_description_input")
+                            if (txType == MoneyTransactionType.EXPENSE) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isUnitDescriptionChecked) {
+                                        val subLabel = selectedSubCategoryName.ifBlank { selectedCategoryName.ifBlank { "item" } }
+                                        OutlinedTextField(
+                                            value = unitQuantityText,
+                                            onValueChange = { raw ->
+                                                unitQuantityText = raw.filter { ch -> ch.isDigit() || ch == '.' || ch == ',' }
+                                            },
+                                            placeholder = {
+                                                Text(
+                                                    text = "Jumlah $subLabel (mis. 2.5)...",
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = SoftGoldHighlight,
+                                                    border = BorderStroke(1.dp, HoneyCaramelAccent.copy(alpha = 0.6f)),
+                                                    modifier = Modifier.padding(end = 6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = selectedUnitSymbol,
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = RichEspressoPrimary,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    )
+                                                }
+                                            },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedContainerColor = SoftOatSurface,
+                                                unfocusedContainerColor = SoftOatSurface,
+                                                focusedBorderColor = activeAccentColor,
+                                                unfocusedBorderColor = HoneyCaramelAccent
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("mm_description_input")
+                                        )
+                                    } else {
+                                        OutlinedTextField(
+                                            value = descriptionText,
+                                            onValueChange = { descriptionText = capitalizeSentenceStart(it) },
+                                            placeholder = { Text("Keterangan tambahan...", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedContainerColor = SoftOatSurface,
+                                                unfocusedContainerColor = SoftOatSurface,
+                                                focusedBorderColor = activeAccentColor,
+                                                unfocusedBorderColor = SubtleSandBorder
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("mm_description_input")
+                                        )
+                                    }
+
+                                    // Small Unit Column Button (gr, kg, ons, ml, L, pcs, pack, dll)
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isUnitDescriptionChecked) SoftGoldHighlight else SoftOatSurface,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isUnitDescriptionChecked) HoneyCaramelAccent else SubtleSandBorder
+                                        ),
+                                        modifier = Modifier
+                                            .height(54.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable { activePicker = ActiveOverlayPicker.EXPENSE_UNIT }
+                                            .testTag("mm_expense_unit_selector_btn")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Text(
+                                                text = "$selectedUnitSymbol ▾",
+                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                                color = RichEspressoPrimary
+                                            )
+                                        }
+                                    }
+
+                                    // Checkmark Toggle Button (✓)
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isUnitDescriptionChecked) MatchaSageSuccess else SoftOatSurface,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isUnitDescriptionChecked) MatchaSageSuccess else SubtleSandBorder
+                                        ),
+                                        modifier = Modifier
+                                            .size(54.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable {
+                                                val nextChecked = !isUnitDescriptionChecked
+                                                if (nextChecked && unitQuantityText.isBlank() && descriptionText.isNotBlank()) {
+                                                    val parsed = parseQuantityAndUnitFromDescription(descriptionText)
+                                                    if (parsed != null) {
+                                                        unitQuantityText = parsed.first
+                                                        selectedUnitSymbol = parsed.second
+                                                    } else {
+                                                        val numericCandidate = descriptionText.trim().filter { it.isDigit() || it == '.' || it == ',' }
+                                                        if (numericCandidate.isNotBlank() && numericCandidate == descriptionText.trim()) {
+                                                            unitQuantityText = numericCandidate
+                                                        }
+                                                    }
+                                                }
+                                                isUnitDescriptionChecked = nextChecked
+                                                if (selectedCategoryName.isNotBlank()) {
+                                                    onSaveExpenseSubCategoryConfig(
+                                                        ExpenseSubCategoryInputConfig(
+                                                            categoryName = selectedCategoryName,
+                                                            subCategoryName = selectedSubCategoryName,
+                                                            noteMode = expenseNoteMode,
+                                                            isUnitDescriptionEnabled = nextChecked,
+                                                            unitSymbol = selectedUnitSymbol
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                            .testTag("mm_expense_unit_check_btn")
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Gunakan Satuan Item Sub-Kategori",
+                                                tint = if (isUnitDescriptionChecked) Color.White else MutedCocoaText,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    value = descriptionText,
+                                    onValueChange = { descriptionText = capitalizeSentenceStart(it) },
+                                    placeholder = { Text("Keterangan tambahan...") },
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = SoftOatSurface,
+                                        unfocusedContainerColor = SoftOatSurface,
+                                        focusedBorderColor = activeAccentColor,
+                                        unfocusedBorderColor = SubtleSandBorder
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("mm_description_input")
+                                )
+                            }
+                        }
+                    }
+
+                    val resolveEffectiveDescription: () -> String = {
+                        if (txType == MoneyTransactionType.EXPENSE && isUnitDescriptionChecked) {
+                            formatQuantityWithUnitDescription(unitQuantityText, selectedUnitSymbol)
+                        } else {
+                            descriptionText.trim()
+                        }
+                    }
+                    val persistCurrentExpenseSubCategoryConfig: () -> Unit = {
+                        if (txType == MoneyTransactionType.EXPENSE && selectedCategoryName.isNotBlank()) {
+                            onSaveExpenseSubCategoryConfig(
+                                ExpenseSubCategoryInputConfig(
+                                    categoryName = selectedCategoryName,
+                                    subCategoryName = selectedSubCategoryName,
+                                    noteMode = expenseNoteMode,
+                                    isUnitDescriptionEnabled = isUnitDescriptionChecked,
+                                    unitSymbol = selectedUnitSymbol
+                                )
                             )
                         }
-
-
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -3116,6 +3574,8 @@ private fun MoneyTransactionFormDialog(
                                     .clip(RoundedCornerShape(50))
                                     .clickable {
                                         val finalAmt = evaluateSimpleMathExpression(amountExpression)
+                                        val effectiveDesc = resolveEffectiveDescription()
+                                        persistCurrentExpenseSubCategoryConfig()
                                         val title = noteText.trim().ifEmpty {
                                             selectedSubCategoryName.ifEmpty { selectedCategoryName.ifEmpty { "Bookmark Transaksi" } }
                                         }
@@ -3131,7 +3591,7 @@ private fun MoneyTransactionFormDialog(
                                                 toAccountGroup = if (txType == MoneyTransactionType.TRANSFER) toAccountGroup else "",
                                                 toAccountName = if (txType == MoneyTransactionType.TRANSFER) toAccountName else "",
                                                 note = noteText.trim(),
-                                                description = descriptionText.trim(),
+                                                description = effectiveDesc,
                                                 tag = tagText.trim()
                                             )
                                         )
@@ -3191,6 +3651,8 @@ private fun MoneyTransactionFormDialog(
                                             val finalAmt = evaluateSimpleMathExpression(amountExpression)
                                             val finalFeeAmt = evaluateSimpleMathExpression(feeExpression)
                                             if (finalAmt > 0L && isFormValid) {
+                                                val effectiveDesc = resolveEffectiveDescription()
+                                                persistCurrentExpenseSubCategoryConfig()
                                                 val rec = buildTransactionRecord(
                                                     existing = null,
                                                     txType = txType,
@@ -3206,7 +3668,7 @@ private fun MoneyTransactionFormDialog(
                                                     toAccountGroup = toAccountGroup,
                                                     toAccountName = toAccountName,
                                                     note = noteText,
-                                                    description = descriptionText,
+                                                    description = effectiveDesc,
                                                     tag = tagText,
                                                     repetition = repetition
                                                 )
@@ -3215,6 +3677,7 @@ private fun MoneyTransactionFormDialog(
                                                 feeExpression = ""
                                                 noteText = ""
                                                 descriptionText = ""
+                                                unitQuantityText = ""
                                             }
                                         }
                                 ) {
@@ -3233,6 +3696,8 @@ private fun MoneyTransactionFormDialog(
                                     val finalAmt = evaluateSimpleMathExpression(amountExpression)
                                     val finalFeeAmt = evaluateSimpleMathExpression(feeExpression)
                                     if (finalAmt > 0L && isFormValid) {
+                                        val effectiveDesc = resolveEffectiveDescription()
+                                        persistCurrentExpenseSubCategoryConfig()
                                         val rec = buildTransactionRecord(
                                             existing = existingTransaction,
                                             txType = txType,
@@ -3248,7 +3713,7 @@ private fun MoneyTransactionFormDialog(
                                             toAccountGroup = toAccountGroup,
                                             toAccountName = toAccountName,
                                             note = noteText,
-                                            description = descriptionText,
+                                            description = effectiveDesc,
                                             tag = tagText,
                                             repetition = repetition
                                         )
@@ -3272,7 +3737,7 @@ private fun MoneyTransactionFormDialog(
                 }
 
                 // =========================================================================
-                // FLOATING 2-COLUMN OVERLAY PICKERS (Category, Account, Repetition)
+                // FLOATING 2-COLUMN OVERLAY PICKERS (Category, Account, Repetition, Unit)
                 // =========================================================================
 
                 // Background Scrim for floating overlays (tap outside to close)
@@ -3294,6 +3759,22 @@ private fun MoneyTransactionFormDialog(
                         onSelectCategoryAndSub = { catName, subName ->
                             selectedCategoryName = catName
                             selectedSubCategoryName = subName
+                            if (txType == MoneyTransactionType.EXPENSE) {
+                                val savedCfg = resolveExpenseSubCategoryConfig(catName, subName)
+                                if (savedCfg != null) {
+                                    expenseNoteMode = savedCfg.noteMode
+                                    isUnitDescriptionChecked = savedCfg.isUnitDescriptionEnabled
+                                    selectedUnitSymbol = savedCfg.unitSymbol
+                                } else {
+                                    expenseNoteMode = ExpenseNoteMode.NOTE
+                                    isUnitDescriptionChecked = false
+                                    selectedUnitSymbol = "kg"
+                                }
+                                if (existingTransaction == null) {
+                                    noteText = ""
+                                    unitQuantityText = ""
+                                }
+                            }
                             activePicker = ActiveOverlayPicker.NONE
                         },
                         onClose = { activePicker = ActiveOverlayPicker.NONE },
@@ -3389,6 +3870,33 @@ private fun MoneyTransactionFormDialog(
                         onDoneClick = {
                             val res = evaluateSimpleMathExpression(feeExpression)
                             if (res > 0L) feeExpression = res.toString()
+                            activePicker = ActiveOverlayPicker.NONE
+                        },
+                        onClose = { activePicker = ActiveOverlayPicker.NONE },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(16.dp)
+                    )
+                }
+
+                if (activePicker == ActiveOverlayPicker.EXPENSE_UNIT) {
+                    ExpenseUnitOverlayPicker(
+                        selectedUnit = selectedUnitSymbol,
+                        subCategoryLabel = selectedSubCategoryName.ifBlank { selectedCategoryName.ifBlank { "Item" } },
+                        onSelectUnit = { unit ->
+                            selectedUnitSymbol = unit
+                            isUnitDescriptionChecked = true
+                            if (selectedCategoryName.isNotBlank()) {
+                                onSaveExpenseSubCategoryConfig(
+                                    ExpenseSubCategoryInputConfig(
+                                        categoryName = selectedCategoryName,
+                                        subCategoryName = selectedSubCategoryName,
+                                        noteMode = expenseNoteMode,
+                                        isUnitDescriptionEnabled = true,
+                                        unitSymbol = unit
+                                    )
+                                )
+                            }
                             activePicker = ActiveOverlayPicker.NONE
                         },
                         onClose = { activePicker = ActiveOverlayPicker.NONE },
@@ -4089,6 +4597,116 @@ private fun buildTransactionRecord(
         tag = tag.trim(),
         repetition = repetition.label
     )
+}
+
+@Composable
+private fun ExpenseUnitOverlayPicker(
+    selectedUnit: String,
+    subCategoryLabel: String,
+    onSelectUnit: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = RichEspressoPrimary,
+        border = BorderStroke(1.5.dp, HoneyCaramelAccent),
+        shadowElevation = 16.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(max = 315.dp)
+            .zIndex(30f)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.22f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Pilih Satuan Item ($subCategoryLabel)",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = ElevatedIvoryCard
+                    )
+                    Text(
+                        text = "Otomatis tersimpan untuk Sub-Kategori ini pada penginputan berikutnya",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = HoneyCaramelAccent
+                    )
+                }
+                Text(
+                    text = "Tutup ✕",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = HoneyCaramelAccent,
+                    modifier = Modifier.clickable(onClick = onClose)
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                DefaultExpenseUnitGroups.forEach { group ->
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = group.groupTitle,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = HoneyCaramelAccent
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            group.units.forEach { unitSym ->
+                                val isSel = unitSym.equals(selectedUnit, ignoreCase = true)
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isSel) HoneyCaramelAccent else ElevatedIvoryCard.copy(alpha = 0.12f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSel) ElevatedIvoryCard else HoneyCaramelAccent.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { onSelectUnit(unitSym) }
+                                        .testTag("mm_unit_option_$unitSym")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = unitSym,
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isSel) RichEspressoPrimary else ElevatedIvoryCard
+                                        )
+                                        if (isSel) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = RichEspressoPrimary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun evaluateSimpleMathExpression(expr: String): Long =

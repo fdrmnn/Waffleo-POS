@@ -646,4 +646,73 @@ class PromoEngineTest {
         assertEquals(4600L, eval.totalDiscountAmount)
         assertEquals(21400L, eval.finalTotalAmount)
     }
+
+    @Test
+    fun scenario18_filterEligiblePromosForCart_includesEligibleAutoAndVoucherAndExcludesIneligible() {
+        val autoPromoEligible = buildPromoRecord(
+            id = "promo_auto_waffle",
+            name = "Diskon Waffle 10%",
+            config = PromoConfig(
+                promoType = PromoType.PRODUCT_DISCOUNT,
+                applyToAllProducts = true,
+                benefitType = PromoBenefitType.DISCOUNT_PERCENT,
+                discountValue = 10L,
+                minItemQty = 1,
+                applyToAllBranches = true,
+                isAutoApply = true
+            )
+        )
+        val voucherPromoEligible = buildPromoRecord(
+            id = "promo_voucher_hemat",
+            name = "Voucher Hemat 5rb",
+            config = PromoConfig(
+                promoType = PromoType.MINIMUM_PURCHASE,
+                applyToAllProducts = true,
+                benefitType = PromoBenefitType.DISCOUNT_NOMINAL,
+                discountValue = 5000L,
+                minPurchaseAmount = 15000L,
+                applyToAllBranches = true,
+                isAutoApply = false,
+                voucherCode = "HEMAT5K"
+            )
+        )
+        val minOrderIneligiblePromo = buildPromoRecord(
+            id = "promo_min_100k",
+            name = "Diskon 20rb Min 100rb",
+            config = PromoConfig(
+                promoType = PromoType.MINIMUM_PURCHASE,
+                applyToAllProducts = true,
+                benefitType = PromoBenefitType.DISCOUNT_NOMINAL,
+                discountValue = 20000L,
+                minPurchaseAmount = 100000L,
+                applyToAllBranches = true,
+                isAutoApply = true
+            )
+        )
+
+        val cartItems = listOf(
+            CartLineItem(
+                lineId = "line_1",
+                category = "Egg Waffle",
+                primaryItemId = waffleChoco.id,
+                primaryItemName = waffleChoco.name,
+                qty = 1,
+                unitPriceWalkIn = 18000L
+            )
+        )
+
+        val eligible = WaffleoPromoEngine.filterEligiblePromosForCart(
+            cartItems = cartItems,
+            media = OrderMedia.WALK_IN,
+            activeBranchId = "Global",
+            catalog = baseCatalog + autoPromoEligible + voucherPromoEligible + minOrderIneligiblePromo
+        )
+
+        assertEquals(2, eligible.size)
+        assertTrue(eligible.any { it.id == "promo_auto_waffle" })
+        assertTrue(eligible.any { it.id == "promo_voucher_hemat" })
+        assertFalse(eligible.any { it.id == "promo_min_100k" })
+        assertEquals("promo_voucher_hemat", eligible[0].id)
+        assertEquals("HEMAT5K", PromoConfig.fromCatalogRecord(eligible[0]).voucherCode)
+    }
 }

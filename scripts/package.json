@@ -1,0 +1,15 @@
+{
+  "name": "waffleo-firestore-cleanup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Firebase Admin SDK cleanup script to remove legacy inventory/stock docs and fields while preserving Orders, Money Manager, Audit Logs, Catalog menus/modifiers/promos, and Branch configs.",
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  },
+  "scripts": {
+    "dry-run": "node cleanup_inventory_firestore.mjs --dry-run",
+    "backup": "node cleanup_inventory_firestore.mjs --backup",
+    "execute": "node cleanup_inventory_firestore.mjs --execute"
+  }
+}

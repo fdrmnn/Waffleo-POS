@@ -46,7 +46,9 @@ service cloud.firestore {
         'cashReceivedAmount', 'paymentMethod', 'isPaid', 'isPrepared', 'status',
         'cancelReason', 'cancelledBy', 'cancelledAtText', 'shortfallAmount',
         'changeDueAmount', 'splitCashAmount', 'splitQrisAmount', 'createdBy',
-        'paymentLedgerPayload', 'orderTimelinePayload', 'createdAt', 'updatedAt'
+        'paymentLedgerPayload', 'orderTimelinePayload', 'processingStage',
+        'historicalProducedItemsPayload', 'revisionCount', 'overpaidAmount',
+        'settlementStatus', 'createdAt', 'updatedAt'
       ])
       && isValidWorkspaceUserId(userId, data.userId)
       && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 60
@@ -96,8 +98,7 @@ service cloud.firestore {
       return data.keys().hasAll([
         'userId', 'recordType', 'branchId', 'name', 'category',
         'priceWalkIn', 'priceGrabFood', 'priceGoFood', 'priceShopeeFood',
-        'stockQty', 'stockUnit', 'costPerUnit', 'metadataJson',
-        'isActive', 'createdAt', 'updatedAt'
+        'metadataJson', 'isActive', 'createdAt', 'updatedAt'
       ])
       && data.keys().hasOnly([
         'userId', 'recordType', 'branchId', 'name', 'category',
@@ -106,7 +107,7 @@ service cloud.firestore {
         'isActive', 'createdAt', 'updatedAt'
       ])
       && isValidWorkspaceUserId(userId, data.userId)
-      && data.recordType in ['MENU_ITEM', 'MODIFIER', 'INGREDIENT', 'PROMO', 'BRANCH_CONFIG']
+      && data.recordType in ['MENU_ITEM', 'MODIFIER', 'PROMO', 'BRANCH_CONFIG']
       && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80
       && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
       && data.category is string && data.category.size() >= 1 && data.category.size() <= 100
@@ -114,9 +115,9 @@ service cloud.firestore {
       && data.priceGrabFood is int && data.priceGrabFood >= 0 && data.priceGrabFood <= 100000000
       && data.priceGoFood is int && data.priceGoFood >= 0 && data.priceGoFood <= 100000000
       && data.priceShopeeFood is int && data.priceShopeeFood >= 0 && data.priceShopeeFood <= 100000000
-      && (data.stockQty is int || data.stockQty is float) && data.stockQty >= -1000000 && data.stockQty <= 100000000
-      && data.stockUnit is string && data.stockUnit.size() >= 1 && data.stockUnit.size() <= 40
-      && data.costPerUnit is int && data.costPerUnit >= 0 && data.costPerUnit <= 100000000
+      && (!('stockQty' in data) || ((data.stockQty is int || data.stockQty is float) && data.stockQty >= -1000000 && data.stockQty <= 100000000))
+      && (!('stockUnit' in data) || (data.stockUnit is string && data.stockUnit.size() <= 40))
+      && (!('costPerUnit' in data) || (data.costPerUnit is int && data.costPerUnit >= 0 && data.costPerUnit <= 100000000))
       && data.metadataJson is string && data.metadataJson.size() >= 2 && data.metadataJson.size() <= 15000
       && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000))
       && data.isActive is bool
@@ -157,7 +158,10 @@ service cloud.firestore {
           'timeFormatted', 'amount', 'transferFee', 'category', 'subCategory',
           'accountGroup', 'accountName', 'toAccountGroup', 'toAccountName',
           'note', 'description', 'tag', 'repetition', 'isAutoPosSync',
-          'posSyncKey', 'createdBy', 'feeAccountChoice', 'updatedAt'
+          'posSyncKey', 'createdBy', 'feeAccountChoice', 'expenseClassification',
+          'categoryId', 'subCategoryId', 'linkedCanonicalId', 'linkedInventoryItemId',
+          'purchaseQty', 'purchaseUnit', 'receivedQty', 'receivingStatus',
+          'linkedMovementIdsJson', 'updatedAt'
         ])
         && isValidWorkspaceUserId(userId, data.userId)
         && data.branchId is string && data.branchId.size() >= 1 && data.branchId.size() <= 80

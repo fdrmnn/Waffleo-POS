@@ -1,5 +1,12 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,9 +41,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Payment
@@ -45,6 +50,16 @@ import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.RoomService
+import androidx.compose.material.icons.rounded.ViewAgenda
+import androidx.compose.material.icons.rounded.ViewStream
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -55,6 +70,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,20 +90,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.example.data.model.CartLineItem
+import com.example.data.model.CatalogRecord
 import com.example.data.model.OrderPaymentLedgerEntry
 import com.example.data.model.OrderRecord
 import com.example.data.model.OrderTimelineEvent
 import com.example.data.model.StaffRole
+import com.example.data.model.WaffleoOrderEngine
+import com.example.data.model.capitalizeSentenceStart
 import com.example.ui.components.CancelOrderDialog
 import com.example.ui.components.PaymentModalDialog
 import com.example.ui.components.ThermalReceiptDialog
@@ -99,6 +124,7 @@ import com.example.ui.theme.MatchaSageSuccess
 import com.example.ui.theme.MutedCocoaText
 import com.example.ui.theme.RichEspressoPrimary
 import com.example.ui.theme.buildAnnotatedCartTitle
+import com.example.ui.theme.buildAnnotatedCartTitleSingleLine
 import com.example.ui.theme.buildAnnotatedFlavourLine
 import com.example.ui.theme.RoastedMochaSecondary
 import com.example.ui.theme.SoftAmberBg
@@ -121,6 +147,10 @@ fun OrdersQueueScreen(
     viewModel: WaffleoViewModel
 ) {
     val allOrders by viewModel.orders.collectAsState()
+    val catalog by viewModel.catalogRecords.collectAsState()
+    val customMenuCategories by viewModel.customMenuCategories.collectAsState()
+    val customModifierCategories by viewModel.customModifierCategories.collectAsState()
+    val uiPrefs by viewModel.sessionUiPreferences.collectAsState()
     val activeOrders = remember(allOrders) {
         allOrders.filter { it.status == "ACTIVE" }.sortedBy { it.sequenceIndex }
     }
@@ -129,82 +159,196 @@ fun OrdersQueueScreen(
     var orderToPay by remember { mutableStateOf<OrderRecord?>(null) }
     var orderToPrint by remember { mutableStateOf<OrderRecord?>(null) }
 
-    var gridColumns by remember { mutableIntStateOf(1) }
+    val gridColumns = uiPrefs.ordersGridColumns
+    val itemDisplayFormat = if (uiPrefs.ordersItemDisplayFormat == 2) 2 else 1 // 1 = Checklist per unit (default); 2 = Grouped Qty
+    var showFormatDropdown by remember { mutableStateOf(false) }
+
+    val dropdownArrowRotation by animateFloatAsState(
+        targetValue = if (showFormatDropdown) 180f else 0f,
+        label = "dropdownArrow"
+    )
+    val formatIcon = when (itemDisplayFormat) {
+        2 -> Icons.Rounded.ViewAgenda
+        else -> Icons.Rounded.Checklist
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
-        // Compact Top Bar: Minimalist View Mode Column Toggle positioned at top-right
+        // Modern Floating Control Cluster: Display Mode Switcher & Column Toggle (Zero layout shift)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Tombol Pemilih Format Tampilan (Stylish & Eye-Catching)
+            Box {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = ElevatedIvoryCard,
+                    shadowElevation = 2.dp,
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (showFormatDropdown) DeepCaramelGold else ChampagneGoldAccent.copy(alpha = 0.75f)
+                    ),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(50))
+                        .clickable { showFormatDropdown = true }
+                        .testTag("display_format_dropdown_btn")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 5.dp, end = 10.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = RichEspressoPrimary,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = formatIcon,
+                                    contentDescription = null,
+                                    tint = SoftGoldHighlight,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(7.dp))
+                        Text(
+                            text = "Tampilan $itemDisplayFormat",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                            fontWeight = FontWeight.Bold,
+                            color = RichEspressoPrimary
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Pilih Tampilan",
+                            tint = DeepCaramelGold,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .rotate(dropdownArrowRotation)
+                        )
+                    }
+                }
+
+                // Dropdown Menu (Overlay popup: tidak mendorong layout di bawahnya)
+                DropdownMenu(
+                    expanded = showFormatDropdown,
+                    onDismissRequest = { showFormatDropdown = false },
+                    modifier = Modifier.background(ElevatedIvoryCard)
+                ) {
+                    val formatOptions = listOf(
+                        Triple(1, "Tampilan 1", "Checklist per unit item" to Icons.Rounded.Checklist),
+                        Triple(2, "Tampilan 2", "Ringkas & dikelompokkan" to Icons.Rounded.ViewAgenda)
+                    )
+                    formatOptions.forEach { (fmtNum, fmtTitle, meta) ->
+                        val (fmtSub, fmtIc) = meta
+                        val isSelected = itemDisplayFormat == fmtNum
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isSelected) RichEspressoPrimary else SoftGoldHighlight,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = fmtIc,
+                                                contentDescription = null,
+                                                tint = if (isSelected) SoftGoldHighlight else DeepCaramelGold,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = fmtTitle,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                            color = if (isSelected) DeepCaramelGold else RichEspressoPrimary
+                                        )
+                                        Text(
+                                            text = fmtSub,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            color = MutedCocoaText
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = SoftSageBg,
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Check,
+                                                    contentDescription = "Aktif",
+                                                    tint = MatchaSageSuccess,
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onClick = {
+                                viewModel.setOrdersItemDisplayFormat(fmtNum)
+                                showFormatDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Tombol Kolom Tunggal (Toggle 1 Kolom / 2 Kolom dalam 1 tombol stylish)
             Surface(
                 shape = RoundedCornerShape(50),
-                color = SoftOatSurface,
-                border = BorderStroke(0.8.dp, SubtleSandBorder)
+                color = ElevatedIvoryCard,
+                shadowElevation = 2.dp,
+                border = BorderStroke(1.dp, SubtleSandBorder),
+                modifier = Modifier
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(50))
+                    .clickable { viewModel.setOrdersGridColumns(if (gridColumns == 1) 2 else 1) }
+                    .testTag("column_toggle_btn")
             ) {
                 Row(
-                    modifier = Modifier.padding(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 5.dp, end = 11.dp)
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (gridColumns == 2) DeepCaramelGold else Color.Transparent,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .clickable { gridColumns = 2 }
+                        shape = CircleShape,
+                        color = SoftGoldHighlight,
+                        modifier = Modifier.size(24.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
+                        Box(contentAlignment = Alignment.Center) {
                             Icon(
-                                Icons.Default.GridView,
+                                imageVector = if (gridColumns == 1) Icons.Rounded.ViewStream else Icons.Rounded.GridView,
                                 contentDescription = null,
-                                tint = if (gridColumns == 2) Color.White else RichEspressoPrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "2 Kolom",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                fontWeight = FontWeight.Bold,
-                                color = if (gridColumns == 2) Color.White else RichEspressoPrimary
+                                tint = DeepCaramelGold,
+                                modifier = Modifier.size(14.dp)
                             )
                         }
                     }
-
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (gridColumns == 1) DeepCaramelGold else Color.Transparent,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .clickable { gridColumns = 1 }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Restaurant,
-                                contentDescription = null,
-                                tint = if (gridColumns == 1) Color.White else RichEspressoPrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "1 Kolom",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                fontWeight = FontWeight.Bold,
-                                color = if (gridColumns == 1) Color.White else RichEspressoPrimary
-                            )
-                        }
-                    }
+                    Spacer(modifier = Modifier.width(7.dp))
+                    Text(
+                        text = if (gridColumns == 1) "1 Kolom" else "2 Kolom",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = RichEspressoPrimary
+                    )
                 }
             }
         }
@@ -262,6 +406,10 @@ fun OrdersQueueScreen(
                         netBcaAmount = netBca,
                         platformFeeAmount = platformFee,
                         isCompactColumns = gridColumns > 1,
+                        displayFormat = itemDisplayFormat,
+                        catalog = catalog,
+                        menuCategories = customMenuCategories,
+                        modifierCategories = customModifierCategories,
                         onDeleteClick = { orderToCancel = order },
                         onEditClick = { viewModel.startEditingOrder(order) },
                         onPrintClick = { orderToPrint = order },
@@ -269,12 +417,16 @@ fun OrdersQueueScreen(
                             if (!order.isPaid) orderToPay = order
                         },
                         onPrepareClick = {
-                            if (!order.isPrepared) {
-                                viewModel.markOrderPreparedOneWay(order)
-                            }
+                            viewModel.cycleOrderProcessingStage(order)
                         },
                         onDoneClick = {
-                            viewModel.completeOrderAndDeductStock(order)
+                            viewModel.completeOrder(order)
+                        },
+                        onRefundOverpaidClick = {
+                            viewModel.confirmOrderOverpaymentRefund(order, "Cash")
+                        },
+                        onToggleUnitCheck = { item, unitIndex ->
+                            viewModel.toggleOrderItemUnitChecked(order, item.lineId, unitIndex)
                         }
                     )
                 }
@@ -283,11 +435,12 @@ fun OrdersQueueScreen(
     }
 
     orderToCancel?.let { ord ->
-        CancelOrderDialog(
+        com.example.ui.components.CancelOrderDialog(
             order = ord,
             onDismiss = { orderToCancel = null },
             onConfirmCancel = { reason ->
                 viewModel.cancelOrderWithReason(ord, reason)
+                orderToCancel = null
             }
         )
     }
@@ -314,7 +467,10 @@ fun OrdersQueueScreen(
             onDismiss = { orderToPrint = null },
             onPrinted = {
                 viewModel.showBanner("Struk ${ord.displayOrderNumber} berhasil dikirim ke printer thermal.")
-            }
+            },
+            catalog = catalog,
+            menuCategories = customMenuCategories,
+            modifierCategories = customModifierCategories
         )
     }
 }
@@ -326,24 +482,29 @@ private fun ActiveOrderCard(
     netBcaAmount: Long,
     platformFeeAmount: Long,
     isCompactColumns: Boolean = false,
+    displayFormat: Int = 1,
+    catalog: List<CatalogRecord> = emptyList(),
+    menuCategories: List<String> = listOf("Egg Waffle", "Drinks"),
+    modifierCategories: List<String> = listOf("Flavour", "Add-on", "Sweetness", "Ice Level"),
     onDeleteClick: () -> Unit,
     onEditClick: () -> Unit,
     onPrintClick: () -> Unit,
     onPayClick: () -> Unit,
     onPrepareClick: () -> Unit,
-    onDoneClick: () -> Unit
+    onDoneClick: () -> Unit,
+    onRefundOverpaidClick: () -> Unit = {},
+    onToggleUnitCheck: (CartLineItem, Int) -> Unit = { _, _ -> }
 ) {
-    val isDoneEnabled = order.isPaid && order.isPrepared
+    val isDoneEnabled = order.isPaid && order.isPrepared && order.overpaidAmount <= 0L
     val isPlatformOrder = order.orderMedia in listOf("GrabFood", "GoFood", "ShopeeFood")
-    val lineItems = remember(order.itemsPayload) {
-        CartLineItem.deserializeList(order.itemsPayload).sortedWith(
-            compareBy { item ->
-                when (item.category) {
-                    "Egg Waffle" -> 0
-                    "Drinks" -> 1
-                    else -> 2
-                }
-            }
+    // Universal Settings-driven sort order across Tampilan 1, 2, 3, 1 Kolom, and 2 Kolom
+    val lineItems = remember(order.itemsPayload, order.revisionCount, catalog, menuCategories, modifierCategories) {
+        WaffleoOrderEngine.sortCartLineItems(
+            items = CartLineItem.deserializeList(order.itemsPayload),
+            catalog = catalog,
+            menuCategories = menuCategories,
+            modifierCategories = modifierCategories,
+            separateNewRevisionAdditions = order.revisionCount > 0
         )
     }
 
@@ -463,100 +624,122 @@ private fun ActiveOrderCard(
                 ) {
                     // Left Column: Items and Notes (weight allows items to flow downwards naturally if multiple items)
                     Column(
-                        modifier = Modifier.weight(if (isCompactColumns) 1.2f else 1f),
+                        modifier = Modifier.weight(if (isCompactColumns) 1.25f else 1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (lineItems.isNotEmpty()) {
-                            lineItems.forEach { item ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.Top,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    // High-contrast quantity pill
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = SoftGoldHighlight,
-                                        border = BorderStroke(1.dp, ChampagneGoldAccent.copy(alpha = 0.6f))
-                                    ) {
-                                        Text(
-                                            text = "${item.qty}x",
-                                            color = RichEspressoPrimary,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            if (displayFormat == 1) {
+                                // TAMPILAN 1 (Default): List flat per unit dengan modifier di kanan (otomatis turun ke bawah semua jika kepanjangan) + ceklis dinamis
+                                lineItems.forEach { item ->
+                                    val singleLineTitle = remember(item) { item.buildAnnotatedCartTitleSingleLine() }
+
+                                    for (uIdx in 0 until item.qty) {
+                                        val isUnitChecked = uIdx < item.completedUnitCount || item.isCompletedLockedBadge || order.processingStage >= 2
+                                        ChecklistUnitItemRow(
+                                            singleLineTitle = singleLineTitle,
+                                            item = item,
+                                            isUnitChecked = isUnitChecked,
+                                            onToggle = { onToggleUnitCheck(item, uIdx) }
                                         )
                                     }
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        val annotatedTitle = remember(item) { item.buildAnnotatedCartTitle() }
-                                        Text(
-                                            text = annotatedTitle,
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontSize = 12.5.sp,
-                                                lineHeight = 16.5.sp,
-                                                letterSpacing = (-0.1).sp
-                                            ),
-                                            color = RichEspressoPrimary
-                                        )
-
-                                        // Variant & Add-on chips
-                                        FlowRow(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(top = 2.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                }
+                            } else {
+                                // TAMPILAN 2: Grouped Qty badge + chips
+                                lineItems.forEach { item ->
+                                    val isItemCompleted = item.processingStage >= 2 || (order.isPrepared && !item.isNewRevisionAddition)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        // High-contrast quantity pill + ✅ indicator for completed items (NEVER ❌)
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (isItemCompleted) SoftSageBg else SoftGoldHighlight,
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isItemCompleted) MatchaSageSuccess.copy(alpha = 0.7f) else ChampagneGoldAccent.copy(alpha = 0.6f)
+                                            )
                                         ) {
-                                            if (item.addOnNames.isNotEmpty()) {
-                                                item.addOnNames.forEach { addon ->
-                                                    val isCheeseInWaffle = addon.contains("keju dalam waffle", ignoreCase = true) ||
-                                                        (addon.contains("keju", ignoreCase = true) && addon.contains("waffle", ignoreCase = true))
-                                                    val isCustomMod = addon.contains(":")
-                                                    val addOnLabel = if (isCustomMod || addon.startsWith("+")) addon else "+$addon"
+                                            Text(
+                                                text = if (isItemCompleted) "✅ ${item.qty}x" else "${item.qty}x",
+                                                color = if (isItemCompleted) MatchaSageSuccess else RichEspressoPrimary,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
 
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            val annotatedTitle = remember(item) { item.buildAnnotatedCartTitle() }
+                                            Text(
+                                                text = annotatedTitle,
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontSize = 12.5.sp,
+                                                    lineHeight = 16.5.sp,
+                                                    letterSpacing = (-0.1).sp
+                                                ),
+                                                color = RichEspressoPrimary
+                                            )
+
+                                            // Variant & Add-on chips
+                                            FlowRow(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(top = 2.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                if (item.addOnNames.isNotEmpty()) {
+                                                    item.addOnNames.forEach { addon ->
+                                                        val isCheeseInWaffle = addon.contains("keju dalam waffle", ignoreCase = true) ||
+                                                            (addon.contains("keju", ignoreCase = true) && addon.contains("waffle", ignoreCase = true))
+                                                        val isCustomMod = addon.contains(":")
+                                                        val addOnLabel = if (isCustomMod || addon.startsWith("+")) addon else "+$addon"
+
+                                                        Surface(
+                                                            shape = RoundedCornerShape(4.dp),
+                                                            color = when {
+                                                                isCheeseInWaffle -> SoftAmberBg
+                                                                isCustomMod -> SoftGoldHighlight.copy(alpha = 0.85f)
+                                                                else -> SoftSageBg
+                                                            },
+                                                            border = when {
+                                                                isCheeseInWaffle -> BorderStroke(0.5.dp, HoneyAmberWarning)
+                                                                isCustomMod -> BorderStroke(0.5.dp, ChampagneGoldAccent)
+                                                                else -> null
+                                                            }
+                                                        ) {
+                                                            Text(
+                                                                text = addOnLabel,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontWeight = if (isCheeseInWaffle) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                                                color = when {
+                                                                    isCheeseInWaffle -> DeepCaramelGold
+                                                                    isCustomMod -> RichEspressoPrimary
+                                                                    else -> MatchaSageSuccess
+                                                                },
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                if (item.category == "Drinks") {
                                                     Surface(
                                                         shape = RoundedCornerShape(4.dp),
-                                                        color = when {
-                                                            isCheeseInWaffle -> SoftAmberBg
-                                                            isCustomMod -> SoftGoldHighlight.copy(alpha = 0.85f)
-                                                            else -> SoftSageBg
-                                                        },
-                                                        border = when {
-                                                            isCheeseInWaffle -> BorderStroke(0.5.dp, HoneyAmberWarning)
-                                                            isCustomMod -> BorderStroke(0.5.dp, ChampagneGoldAccent)
-                                                            else -> null
-                                                        }
+                                                        color = SoftGoldHighlight.copy(alpha = 0.7f)
                                                     ) {
                                                         Text(
-                                                            text = addOnLabel,
+                                                            text = "Ice: ${item.icedLevel} • Sugar: ${item.sweetnessLevel}",
                                                             style = MaterialTheme.typography.labelSmall,
-                                                            fontWeight = if (isCheeseInWaffle) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                                            color = when {
-                                                                isCheeseInWaffle -> DeepCaramelGold
-                                                                isCustomMod -> RichEspressoPrimary
-                                                                else -> MatchaSageSuccess
-                                                            },
+                                                            color = RichEspressoPrimary,
                                                             maxLines = 1,
                                                             softWrap = false,
                                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                                         )
                                                     }
-                                                }
-                                            }
-                                            if (item.category == "Drinks") {
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = SoftGoldHighlight.copy(alpha = 0.7f)
-                                                ) {
-                                                    Text(
-                                                        text = "Ice: ${item.icedLevel} • Sugar: ${item.sweetnessLevel}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = RichEspressoPrimary,
-                                                        maxLines = 1,
-                                                        softWrap = false,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                    )
                                                 }
                                             }
                                         }
@@ -665,10 +848,10 @@ private fun ActiveOrderCard(
                             )
                         }
                     } else {
-                        // 2-Kolom View: 2 neat rows of 3 buttons so they never squeeze or clip
+                        // 2-Kolom View: 2 baris x 3 tombol khusus icon/logo tanpa teks agar rapi & tidak terpotong
                         Column(
                             modifier = Modifier
-                                 .weight(0.8f)
+                                .weight(0.75f)
                                 .padding(start = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(5.dp),
                             horizontalAlignment = Alignment.End
@@ -678,25 +861,25 @@ private fun ActiveOrderCard(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OrderDeleteButton(order = order, modifier = Modifier.weight(1f), onClick = onDeleteClick)
-                                OrderEditButton(order = order, modifier = Modifier.weight(1f), onClick = onEditClick)
-                                OrderPrintButton(order = order, modifier = Modifier.weight(1f), onClick = onPrintClick)
+                                OrderDeleteButton(order = order, iconOnly = true, modifier = Modifier.weight(1f), onClick = onDeleteClick)
+                                OrderEditButton(order = order, iconOnly = true, modifier = Modifier.weight(1f), onClick = onEditClick)
+                                OrderPrintButton(order = order, iconOnly = true, modifier = Modifier.weight(1f), onClick = onPrintClick)
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OrderPayButton(order = order, modifier = Modifier.weight(1f), onClick = onPayClick)
+                                OrderPayButton(order = order, iconOnly = true, modifier = Modifier.weight(1f), onClick = onPayClick)
                                 OrderPrepareButton(order = order, modifier = Modifier.weight(1f), onClick = onPrepareClick)
-                                OrderDoneButton(order = order, isDoneEnabled = isDoneEnabled, modifier = Modifier.weight(1f), onClick = onDoneClick)
+                                OrderDoneButton(order = order, isDoneEnabled = isDoneEnabled, iconOnly = true, modifier = Modifier.weight(1f), onClick = onDoneClick)
                             }
                         }
                     }
                 }
             }
 
-            // Payment Reconciliation Banner after Order Edit (Shortfall only, changeDue is already handled at cash drawer)
+            // Phase 9: Payment Reconciliation Banner after Order Edit (Shortfall vs Overpaid / Refund Required)
             if (order.shortfallAmount > 0L) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
@@ -706,20 +889,279 @@ private fun ActiveOrderCard(
                         .padding(top = 6.dp)
                 ) {
                     Text(
-                        text = "⚠️ KURANG BAYAR: ${WaffleoViewModel.formatIdr(order.shortfallAmount)}",
+                        text = "⚠️ KURANG BAYAR: ${WaffleoViewModel.formatIdr(order.shortfallAmount)} (Klik Bayar untuk pelunasan selisih)",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = TerracottaDanger,
                         modifier = Modifier.padding(6.dp)
                     )
                 }
+            } else if (order.overpaidAmount > 0L) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = SoftAmberBg,
+                    border = BorderStroke(1.dp, HoneyAmberWarning),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "💸 LEBIH BAYAR / WAJIB REFUND: ${WaffleoViewModel.formatIdr(order.overpaidAmount)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = DeepCaramelGold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = onRefundOverpaidClick,
+                            shape = RoundedCornerShape(50),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = RichEspressoPrimary,
+                                contentColor = SoftGoldHighlight
+                            ),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .testTag("confirm_refund_overpaid_btn_${order.orderNumber}")
+                        ) {
+                            Text(
+                                text = "Konfirmasi Refund",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChecklistUnitItemRow(
+    singleLineTitle: AnnotatedString,
+    item: CartLineItem,
+    isUnitChecked: Boolean,
+    onToggle: () -> Unit
+) {
+    val hasModifiers = item.addOnNames.isNotEmpty() || item.category == "Drinks"
+
+    @Composable
+    fun ModifierChipsList() {
+        if (item.addOnNames.isNotEmpty()) {
+            item.addOnNames.forEach { addon ->
+                val isCheeseInWaffle = addon.contains("keju dalam waffle", ignoreCase = true) ||
+                    (addon.contains("keju", ignoreCase = true) && addon.contains("waffle", ignoreCase = true))
+                val isCustomMod = addon.contains(":")
+                val addOnLabel = if (isCustomMod || addon.startsWith("+")) addon else "+$addon"
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = when {
+                        isCheeseInWaffle -> SoftAmberBg
+                        isCustomMod -> SoftGoldHighlight.copy(alpha = 0.85f)
+                        else -> SoftSageBg
+                    },
+                    border = when {
+                        isCheeseInWaffle -> BorderStroke(0.5.dp, HoneyAmberWarning)
+                        isCustomMod -> BorderStroke(0.5.dp, ChampagneGoldAccent)
+                        else -> null
+                    }
+                ) {
+                    Text(
+                        text = addOnLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (isCheeseInWaffle) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        color = when {
+                            isCheeseInWaffle -> DeepCaramelGold
+                            isCustomMod -> RichEspressoPrimary
+                            else -> MatchaSageSuccess
+                        },
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+            }
+        }
+        if (item.category == "Drinks") {
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = SoftGoldHighlight.copy(alpha = 0.7f)
+            ) {
+                Text(
+                    text = "Ice: ${item.icedLevel} • Sugar: ${item.sweetnessLevel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = RichEspressoPrimary,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun UnitCheckBoxBadge(modifier: Modifier = Modifier) {
+        Surface(
+            shape = RoundedCornerShape(4.dp),
+            color = if (isUnitChecked) MatchaSageSuccess else Color.Transparent,
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (isUnitChecked) MatchaSageSuccess else SubtleSandBorder
+            ),
+            modifier = modifier
+                .size(16.dp)
+                .clip(RoundedCornerShape(4.dp))
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (isUnitChecked) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Diceklis",
+                        tint = Color.White,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .wrapContentWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onToggle)
+            .padding(vertical = 1.5.dp, horizontal = 2.dp)
+    ) {
+        SubcomposeLayout { constraints ->
+            val maxW = constraints.maxWidth
+            val unbounded = Constraints(maxWidth = Constraints.Infinity, maxHeight = Constraints.Infinity)
+
+            val titleSingleWidth = subcompose("measure_title") {
+                Text(
+                    text = singleLineTitle,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 12.5.sp,
+                        lineHeight = 16.5.sp,
+                        letterSpacing = (-0.1).sp
+                    ),
+                    color = RichEspressoPrimary,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }.first().measure(unbounded).width
+
+            val tailSingleWidth = subcompose("measure_tail") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    ModifierChipsList()
+                    UnitCheckBoxBadge()
+                }
+            }.first().measure(unbounded).width
+
+            val gapPx = 6.dp.roundToPx()
+            val fitsOneLine = (titleSingleWidth + gapPx + tailSingleWidth) <= maxW
+
+            val finalPlaceable = if (fitsOneLine) {
+                subcompose("render_inline") {
+                    Row(
+                        modifier = Modifier.wrapContentWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = singleLineTitle,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.5.sp,
+                                lineHeight = 16.5.sp,
+                                letterSpacing = (-0.1).sp
+                            ),
+                            color = RichEspressoPrimary,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        if (hasModifiers) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                ModifierChipsList()
+                                UnitCheckBoxBadge()
+                            }
+                        } else {
+                            UnitCheckBoxBadge()
+                        }
+                    }
+                }.first().measure(constraints.copy(minWidth = 0))
+            } else if (hasModifiers) {
+                // Jika kepanjangan & memiliki modifier: pindahkan SEMUA modifier (+ tombol ceklis) ke bawah judul item
+                subcompose("render_stacked") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = singleLineTitle,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.5.sp,
+                                lineHeight = 16.5.sp,
+                                letterSpacing = (-0.1).sp
+                            ),
+                            color = RichEspressoPrimary
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            ModifierChipsList()
+                            UnitCheckBoxBadge(modifier = Modifier.align(Alignment.CenterVertically))
+                        }
+                    }
+                }.first().measure(constraints.copy(minWidth = 0))
+            } else {
+                // Jika kepanjangan tanpa modifier: judul wrap natural tanpa terpotong dengan ceklis di kanan
+                subcompose("render_wrapped_plain") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = singleLineTitle,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.5.sp,
+                                lineHeight = 16.5.sp,
+                                letterSpacing = (-0.1).sp
+                            ),
+                            color = RichEspressoPrimary,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        UnitCheckBoxBadge()
+                    }
+                }.first().measure(constraints.copy(minWidth = 0))
+            }
+
+            layout(finalPlaceable.width, finalPlaceable.height) {
+                finalPlaceable.placeRelative(0, 0)
             }
         }
     }
 }
 
 @Composable
-private fun OrderDeleteButton(order: OrderRecord, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun OrderDeleteButton(order: OrderRecord, iconOnly: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(50),
         color = SoftTerracottaBg,
@@ -729,20 +1171,26 @@ private fun OrderDeleteButton(order: OrderRecord, modifier: Modifier = Modifier,
             .clickable(onClick = onClick)
             .testTag("order_delete_btn_${order.orderNumber}")
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        ) {
-            Icon(Icons.Default.DeleteOutline, contentDescription = "Batal", tint = TerracottaDanger, modifier = Modifier.size(13.dp))
-            Spacer(modifier = Modifier.width(3.dp))
-            Text("Batal", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = TerracottaDanger, maxLines = 1)
+        if (iconOnly) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Default.DeleteOutline, contentDescription = "Batal", tint = TerracottaDanger, modifier = Modifier.size(18.dp))
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.DeleteOutline, contentDescription = "Batal", tint = TerracottaDanger, modifier = Modifier.size(13.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Batal", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = TerracottaDanger, maxLines = 1)
+            }
         }
     }
 }
 
 @Composable
-private fun OrderEditButton(order: OrderRecord, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun OrderEditButton(order: OrderRecord, iconOnly: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(50),
         color = SoftOatSurface,
@@ -752,20 +1200,26 @@ private fun OrderEditButton(order: OrderRecord, modifier: Modifier = Modifier, o
             .clickable(onClick = onClick)
             .testTag("order_edit_btn_${order.orderNumber}")
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        ) {
-            Icon(Icons.Default.Edit, contentDescription = "Edit", tint = RichEspressoPrimary, modifier = Modifier.size(13.dp))
-            Spacer(modifier = Modifier.width(3.dp))
-            Text("Edit", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = RichEspressoPrimary, maxLines = 1)
+        if (iconOnly) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = RichEspressoPrimary, modifier = Modifier.size(17.dp))
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = RichEspressoPrimary, modifier = Modifier.size(13.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Edit", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = RichEspressoPrimary, maxLines = 1)
+            }
         }
     }
 }
 
 @Composable
-private fun OrderPrintButton(order: OrderRecord, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun OrderPrintButton(order: OrderRecord, iconOnly: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(50),
         color = SoftOatSurface,
@@ -775,20 +1229,26 @@ private fun OrderPrintButton(order: OrderRecord, modifier: Modifier = Modifier, 
             .clickable(onClick = onClick)
             .testTag("order_print_btn_${order.orderNumber}")
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        ) {
-            Icon(Icons.Default.Print, contentDescription = "Print", tint = RichEspressoPrimary, modifier = Modifier.size(13.dp))
-            Spacer(modifier = Modifier.width(3.dp))
-            Text("Print", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = RichEspressoPrimary, maxLines = 1)
+        if (iconOnly) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Default.Print, contentDescription = "Print", tint = RichEspressoPrimary, modifier = Modifier.size(17.dp))
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                Icon(Icons.Default.Print, contentDescription = "Print", tint = RichEspressoPrimary, modifier = Modifier.size(13.dp))
+                Spacer(modifier = Modifier.width(3.dp))
+                Text("Print", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp), fontWeight = FontWeight.Bold, color = RichEspressoPrimary, maxLines = 1)
+            }
         }
     }
 }
 
 @Composable
-private fun OrderPayButton(order: OrderRecord, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun OrderPayButton(order: OrderRecord, iconOnly: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val isPlatform = order.orderMedia in listOf("GrabFood", "GoFood", "ShopeeFood")
     if (isPlatform) {
         // Platform orders (GrabFood/GoFood/ShopeeFood): Uang baru masuk saat pesanan selesai, tombol dikosongkan tanda " - "
@@ -811,7 +1271,7 @@ private fun OrderPayButton(order: OrderRecord, modifier: Modifier = Modifier, on
             onClick = onClick,
             enabled = !order.isPaid,
             shape = RoundedCornerShape(50),
-            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+            contentPadding = PaddingValues(horizontal = if (iconOnly) 0.dp else 4.dp, vertical = 0.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (order.isPaid) MatchaSageSuccess else ChampagneGoldAccent,
                 contentColor = if (order.isPaid) ElevatedIvoryCard else RichEspressoPrimary,
@@ -822,77 +1282,149 @@ private fun OrderPayButton(order: OrderRecord, modifier: Modifier = Modifier, on
                 .height(36.dp)
                 .testTag("order_pay_btn_${order.orderNumber}")
         ) {
-            Icon(
-                imageVector = if (order.isPaid) Icons.Default.CheckCircle else Icons.Default.Payment,
-                contentDescription = null,
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(modifier = Modifier.width(3.dp))
-            Text(
-                text = if (order.isPaid) "Lunas" else "Bayar",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
-                fontWeight = FontWeight.Bold,
-                maxLines = 1
-            )
+            if (iconOnly) {
+                Icon(
+                    imageVector = if (order.isPaid) Icons.Default.CheckCircle else Icons.Default.Payment,
+                    contentDescription = if (order.isPaid) "Lunas" else "Bayar",
+                    modifier = Modifier.size(18.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = if (order.isPaid) Icons.Default.CheckCircle else Icons.Default.Payment,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(3.dp))
+                Text(
+                    text = if (order.isPaid) "Lunas" else "Bayar",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
         }
     }
 }
 
+/**
+ * 3-Stage Order Processing Button:
+ * - Stage 0 (BELUM_DIPROSES): Neutral surface with stylish Waffle & Cooking Pot icon.
+ * - Stage 1 (SEDANG_DIPROSES): Yellow (HoneyAmberWarning) with Pot on cooking stove & steam rising effect.
+ * - Stage 2 (SELESAI_DIPROSES): Green (MatchaSageSuccess) with Cooking Pot and lid open 45°.
+ */
 @Composable
 private fun OrderPrepareButton(order: OrderRecord, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = !order.isPrepared,
+    val stage = when {
+        order.processingStage >= 2 || order.isPrepared -> 2
+        order.processingStage == 1 -> 1
+        else -> 0
+    }
+    val bgColor = when (stage) {
+        2 -> MatchaSageSuccess
+        1 -> HoneyAmberWarning
+        else -> SoftOatSurface
+    }
+    val iconColor = when (stage) {
+        2 -> ElevatedIvoryCard
+        1 -> RichEspressoPrimary
+        else -> RichEspressoPrimary
+    }
+    val borderStroke = when (stage) {
+        2 -> BorderStroke(1.dp, MatchaSageSuccess)
+        1 -> BorderStroke(1.dp, DeepCaramelGold)
+        else -> BorderStroke(1.dp, SubtleSandBorder)
+    }
+    val desc = when (stage) {
+        2 -> "Selesai Diproses (Hijau)"
+        1 -> "Sedang Diproses (Kuning)"
+        else -> "Belum Diproses"
+    }
+
+    Surface(
         shape = RoundedCornerShape(50),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (order.isPrepared) HoneyAmberWarning else RoastedMochaSecondary,
-            contentColor = ElevatedIvoryCard,
-            disabledContainerColor = HoneyAmberWarning,
-            disabledContentColor = ElevatedIvoryCard
-        ),
+        color = bgColor,
+        border = borderStroke,
         modifier = modifier
             .height(36.dp)
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick)
             .testTag("order_prepare_btn_${order.orderNumber}")
     ) {
-        if (order.isPrepared) {
-            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(13.dp))
-            Spacer(modifier = Modifier.width(3.dp))
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AnimatedContent(
+                targetState = stage,
+                transitionSpec = {
+                    (fadeIn() + scaleIn(initialScale = 0.85f)) togetherWith fadeOut()
+                },
+                label = "orderPrepareIcon"
+            ) { targetStage ->
+                val stageIcon = when (targetStage) {
+                    1 -> Icons.Rounded.LocalFireDepartment
+                    2 -> Icons.Rounded.RoomService
+                    else -> Icons.Rounded.HourglassTop
+                }
+                Icon(
+                    imageVector = stageIcon,
+                    contentDescription = desc,
+                    tint = iconColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
-        Text(
-            text = if (order.isPrepared) "Siap" else "Proses",
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
     }
 }
 
 @Composable
-private fun OrderDoneButton(order: OrderRecord, isDoneEnabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = isDoneEnabled,
-        shape = RoundedCornerShape(50),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = RichEspressoPrimary,
-            contentColor = SoftGoldHighlight,
-            disabledContainerColor = SoftOatSurface,
-            disabledContentColor = MutedCocoaText.copy(alpha = 0.45f)
-        ),
-        modifier = modifier
-            .height(36.dp)
-            .testTag("order_done_btn_${order.orderNumber}")
-    ) {
-        Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(13.dp))
-        Spacer(modifier = Modifier.width(3.dp))
-        Text(
-            text = "Selesai!",
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
+private fun OrderDoneButton(order: OrderRecord, isDoneEnabled: Boolean, iconOnly: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    if (!isDoneEnabled) {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = SoftOatSurface.copy(alpha = 0.5f),
+            modifier = modifier
+                .height(36.dp)
+                .testTag("order_done_btn_${order.orderNumber}")
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = " - ",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp),
+                    fontWeight = FontWeight.Bold,
+                    color = MutedCocoaText.copy(alpha = 0.6f)
+                )
+            }
+        }
+    } else {
+        Button(
+            onClick = onClick,
+            enabled = true,
+            shape = RoundedCornerShape(50),
+            contentPadding = PaddingValues(horizontal = if (iconOnly) 0.dp else 6.dp, vertical = 0.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = RichEspressoPrimary,
+                contentColor = SoftGoldHighlight
+            ),
+            modifier = modifier
+                .height(36.dp)
+                .testTag("order_done_btn_${order.orderNumber}")
+        ) {
+            if (iconOnly) {
+                Icon(
+                    imageVector = Icons.Rounded.DoneAll,
+                    contentDescription = "Selesai",
+                    modifier = Modifier.size(18.dp)
+                )
+            } else {
+                Text(
+                    text = "Selesai",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
@@ -924,15 +1456,19 @@ fun OrderHistoryScreen(
     viewModel: WaffleoViewModel
 ) {
     val allOrders by viewModel.orders.collectAsState()
+    val catalog by viewModel.catalogRecords.collectAsState()
+    val customMenuCategories by viewModel.customMenuCategories.collectAsState()
+    val customModifierCategories by viewModel.customModifierCategories.collectAsState()
     val session by viewModel.session.collectAsState()
-    var selectedTabIndex by remember { mutableIntStateOf(0) } // 0 = All, 1 = Done, 2 = Cancelled
-    var selectedPeriod by remember { mutableStateOf(HistoryFilterPeriod.TODAY) }
-    var customDays by remember { mutableIntStateOf(14) }
+    val uiPrefs by viewModel.sessionUiPreferences.collectAsState()
+    val selectedTabIndex = uiPrefs.historySelectedTabIndex
+    val selectedPeriod = uiPrefs.historySelectedPeriod
+    val customDays = uiPrefs.historyCustomDays
     var showCustomDateDialog by remember { mutableStateOf(false) }
-    var customStartMillis by remember { mutableStateOf<Long?>(null) }
-    var customEndMillis by remember { mutableStateOf<Long?>(null) }
-    var isCustomRangeActive by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    val customStartMillis = uiPrefs.historyCustomStartMillis
+    val customEndMillis = uiPrefs.historyCustomEndMillis
+    val isCustomRangeActive = uiPrefs.historyIsCustomRangeActive
+    val searchQuery = uiPrefs.historySearchQuery
     var clickedOrderForDetail by remember { mutableStateOf<OrderRecord?>(null) }
 
     val periodOrders = remember(allOrders, selectedPeriod, customDays, isCustomRangeActive, customStartMillis, customEndMillis) {
@@ -1005,7 +1541,7 @@ fun OrderHistoryScreen(
                     )
                     BasicTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = { q -> viewModel.updateSessionUiPreferences { it.copy(historySearchQuery = q) } },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("history_search_input"),
@@ -1027,7 +1563,7 @@ fun OrderHistoryScreen(
                     )
                     if (searchQuery.isNotEmpty()) {
                         IconButton(
-                            onClick = { searchQuery = "" },
+                            onClick = { viewModel.updateSessionUiPreferences { it.copy(historySearchQuery = "") } },
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
@@ -1051,12 +1587,15 @@ fun OrderHistoryScreen(
                     selectedText = selectedPeriod.label,
                     options = HistoryFilterPeriod.entries,
                     optionLabel = { it.label },
-                    onOptionSelected = {
-                        selectedPeriod = it
-                        if (it == HistoryFilterPeriod.CUSTOM) {
+                    onOptionSelected = { nextPeriod ->
+                        viewModel.updateSessionUiPreferences {
+                            it.copy(
+                                historySelectedPeriod = nextPeriod,
+                                historyIsCustomRangeActive = if (nextPeriod == HistoryFilterPeriod.CUSTOM) it.historyIsCustomRangeActive else false
+                            )
+                        }
+                        if (nextPeriod == HistoryFilterPeriod.CUSTOM) {
                             showCustomDateDialog = true
-                        } else {
-                            isCustomRangeActive = false
                         }
                     },
                     containerColor = ElevatedIvoryCard,
@@ -1096,9 +1635,13 @@ fun OrderHistoryScreen(
                             selectedText = "$customDays Hari Terakhir",
                             options = listOf(3, 7, 14, 30, 60, 90),
                             optionLabel = { "$it Hari Terakhir" },
-                            onOptionSelected = {
-                                customDays = it
-                                isCustomRangeActive = false
+                            onOptionSelected = { nextDays ->
+                                viewModel.updateSessionUiPreferences {
+                                    it.copy(
+                                        historyCustomDays = nextDays,
+                                        historyIsCustomRangeActive = false
+                                    )
+                                }
                             },
                             containerColor = ElevatedIvoryCard,
                             modifier = Modifier.width(160.dp),
@@ -1115,9 +1658,13 @@ fun OrderHistoryScreen(
                 initialEndMillis = customEndMillis,
                 onDismiss = { showCustomDateDialog = false },
                 onConfirm = { startMs, endMs ->
-                    customStartMillis = startMs
-                    customEndMillis = endMs
-                    isCustomRangeActive = true
+                    viewModel.updateSessionUiPreferences {
+                        it.copy(
+                            historyCustomStartMillis = startMs,
+                            historyCustomEndMillis = endMs,
+                            historyIsCustomRangeActive = true
+                        )
+                    }
                     showCustomDateDialog = false
                 }
             )
@@ -1157,7 +1704,7 @@ fun OrderHistoryScreen(
                             .weight(1f)
                             .height(40.dp)
                             .clip(RoundedCornerShape(50))
-                            .clickable { selectedTabIndex = index }
+                            .clickable { viewModel.updateSessionUiPreferences { it.copy(historySelectedTabIndex = index) } }
                             .testTag(
                                 when (index) {
                                     0 -> "history_tab_all"
@@ -1263,8 +1810,13 @@ fun OrderHistoryScreen(
                         }
                     }
 
-                    val lineItems = remember(order.itemsPayload) {
-                        CartLineItem.deserializeList(order.itemsPayload)
+                    val lineItems = remember(order.itemsPayload, catalog, customMenuCategories, customModifierCategories) {
+                        WaffleoOrderEngine.sortCartLineItems(
+                            items = CartLineItem.deserializeList(order.itemsPayload),
+                            catalog = catalog,
+                            menuCategories = customMenuCategories,
+                            modifierCategories = customModifierCategories
+                        )
                     }
 
                     Card(
@@ -1714,7 +2266,14 @@ fun OrderHistoryScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        val lineItems = remember(ord.itemsPayload) { CartLineItem.deserializeList(ord.itemsPayload) }
+                                        val lineItems = remember(ord.itemsPayload, catalog, customMenuCategories, customModifierCategories) {
+                                            WaffleoOrderEngine.sortCartLineItems(
+                                                items = CartLineItem.deserializeList(ord.itemsPayload),
+                                                catalog = catalog,
+                                                menuCategories = customMenuCategories,
+                                                modifierCategories = customModifierCategories
+                                            )
+                                        }
                                         if (lineItems.isNotEmpty()) {
                                             lineItems.forEachIndexed { idx, item ->
                                                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -2123,7 +2682,10 @@ fun OrderHistoryScreen(
                     onDismiss = { showThermalReceiptReprint = false },
                     onPrinted = {
                         viewModel.showBanner("Struk pesanan ${ord.displayOrderNumber} berhasil dicetak ulang.")
-                    }
+                    },
+                    catalog = catalog,
+                    menuCategories = customMenuCategories,
+                    modifierCategories = customModifierCategories
                 )
             }
 
@@ -2167,7 +2729,7 @@ fun OrderHistoryScreen(
                                         color = TerracottaDanger
                                     )
                                     Text(
-                                        text = "• Pesanan dipindahkan ke tab 'Erased — Dihapus' untuk audit trail.\n• Rekapan uang masuk di Money Manager & Dashboard otomatis dikurangi.\n• Stok bahan baku yang telah terpakai untuk pesanan ini akan dikembalikan ke gudang.",
+                                        text = "• Pesanan dipindahkan ke tab 'Erased — Dihapus' untuk audit trail.\n• Rekapan uang masuk di Money Manager & Dashboard otomatis dikurangi.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = RichEspressoPrimary
                                     )
@@ -2175,8 +2737,9 @@ fun OrderHistoryScreen(
                             }
                             OutlinedTextField(
                                 value = eraseReasonInput,
-                                onValueChange = { eraseReasonInput = it },
+                                onValueChange = { eraseReasonInput = capitalizeSentenceStart(it) },
                                 label = { Text("Alasan Penghapusan (Catatan Audit)") },
+                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                                 singleLine = true,
                                 modifier = Modifier
                                     .fillMaxWidth()

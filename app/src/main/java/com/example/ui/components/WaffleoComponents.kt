@@ -83,6 +83,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,6 +99,7 @@ import com.example.data.model.CatalogRecord
 import com.example.data.model.OrderMedia
 import com.example.data.model.OrderRecord
 import com.example.data.model.WaffleoSeedData
+import com.example.data.model.capitalizeSentenceStart
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -2332,11 +2334,21 @@ fun PaymentModalDialog(
         PaymentCalcTarget.CASH_RECEIVED -> {
             WaffleoNominalCalculatorDialog(
                 title = "Kalkulator: Uang Tunai Diterima",
-                initialValue = cashNumeric,
+                initialValue = 0L,
                 accentColor = TerracottaDanger,
-                onDismiss = { activeCalculatorTarget = PaymentCalcTarget.NONE },
+                onDismiss = {
+                    if (activeCalculatorTarget == PaymentCalcTarget.CASH_RECEIVED) {
+                        cashInput = amountDue.toString()
+                        activeCalculatorTarget = PaymentCalcTarget.NONE
+                    }
+                },
                 onConfirm = { calculatedAmount ->
-                    cashInput = calculatedAmount.toString()
+                    cashInput = if (calculatedAmount > 0L) {
+                        calculatedAmount.toString()
+                    } else {
+                        amountDue.toString()
+                    }
+                    activeCalculatorTarget = PaymentCalcTarget.NONE
                 }
             )
         }
@@ -2345,9 +2357,12 @@ fun PaymentModalDialog(
                 title = "Kalkulator: Uang Cash (Split)",
                 initialValue = splitCashNumeric,
                 accentColor = DeepCaramelGold,
-                onDismiss = { activeCalculatorTarget = PaymentCalcTarget.NONE },
+                onDismiss = {
+                    activeCalculatorTarget = PaymentCalcTarget.NONE
+                },
                 onConfirm = { calculatedAmount ->
                     splitCashInput = calculatedAmount.toString()
+                    activeCalculatorTarget = PaymentCalcTarget.NONE
                 }
             )
         }
@@ -2356,9 +2371,12 @@ fun PaymentModalDialog(
                 title = "Kalkulator: QRIS (Split)",
                 initialValue = splitQrisNumeric,
                 accentColor = MatchaSageSuccess,
-                onDismiss = { activeCalculatorTarget = PaymentCalcTarget.NONE },
+                onDismiss = {
+                    activeCalculatorTarget = PaymentCalcTarget.NONE
+                },
                 onConfirm = { calculatedAmount ->
                     splitQrisInput = calculatedAmount.toString()
+                    activeCalculatorTarget = PaymentCalcTarget.NONE
                 }
             )
         }
@@ -2410,9 +2428,10 @@ fun CancelOrderDialog(
 
                 WaffleoSoftTextField(
                     value = customNote,
-                    onValueChange = { customNote = it },
+                    onValueChange = { customNote = capitalizeSentenceStart(it) },
                     label = "Keterangan Tambahan (Opsional)",
                     placeholder = "Tulis catatan tambahan...",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -2520,7 +2539,10 @@ fun CancelOrderDialog(
 fun ThermalReceiptDialog(
     order: OrderRecord,
     onDismiss: () -> Unit,
-    onPrinted: () -> Unit
+    onPrinted: () -> Unit,
+    catalog: List<com.example.data.model.CatalogRecord> = emptyList(),
+    menuCategories: List<String> = listOf("Egg Waffle", "Drinks"),
+    modifierCategories: List<String> = listOf("Flavour", "Add-on", "Sweetness", "Ice Level")
 ) {
     val waktuPesanan = remember(order.createdAt, order.updatedAt) {
         val dt = (order.createdAt ?: order.updatedAt)?.toDate()
@@ -2530,7 +2552,14 @@ fun ThermalReceiptDialog(
             SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.forLanguageTag("id-ID")).format(Date())
         }
     }
-    val lineItems = remember(order.itemsPayload) { CartLineItem.deserializeList(order.itemsPayload) }
+    val lineItems = remember(order.itemsPayload, catalog, menuCategories, modifierCategories) {
+        com.example.data.model.WaffleoOrderEngine.sortCartLineItems(
+            items = CartLineItem.deserializeList(order.itemsPayload),
+            catalog = catalog,
+            menuCategories = menuCategories,
+            modifierCategories = modifierCategories
+        )
+    }
     val orderMediaEnum = remember(order.orderMedia) { OrderMedia.fromLabel(order.orderMedia) }
     val context = androidx.compose.ui.platform.LocalContext.current
 

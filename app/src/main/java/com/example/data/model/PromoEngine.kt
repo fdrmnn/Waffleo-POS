@@ -825,6 +825,44 @@ object WaffleoPromoEngine {
     }
 
     /**
+     * Returns only active promos applicable to the branch and currently satisfied by the cart items
+     * (including both auto-apply promos and voucher-code promos whose cart/schedule/quota rules are met).
+     */
+    fun filterEligiblePromosForCart(
+        cartItems: List<CartLineItem>,
+        media: OrderMedia,
+        activeBranchId: String,
+        catalog: List<CatalogRecord>,
+        dynamicUsageMap: Map<String, Int> = emptyMap(),
+        evaluationTimeMillis: Long = System.currentTimeMillis()
+    ): List<CatalogRecord> {
+        val subtotal = cartItems.sumOf { it.lineTotalFor(media) }
+        if (cartItems.isEmpty() || subtotal <= 0L) return emptyList()
+
+        val allUnits = expandCartToUnits(cartItems, media, catalog)
+        return catalog
+            .filter { it.recordType == "PROMO" }
+            .mapNotNull { rec ->
+                val cfg = PromoConfig.fromCatalogRecord(rec)
+                val used = maxOf(cfg.usedCount, dynamicUsageMap[rec.id] ?: 0)
+                val status = resolvePromoStatus(rec, cfg, used, evaluationTimeMillis)
+                if (status != PromoStatus.ACTIVE || !isPromoApplicableToBranch(rec, cfg, activeBranchId)) {
+                    return@mapNotNull null
+                }
+                val remQuota = if (cfg.hasQuotaLimit) (cfg.maxTotalQuota - used).coerceAtLeast(0) else null
+                val eval = evaluateSinglePromoOnUnits(rec, cfg, allUnits, allUnits, remQuota)
+                if (eval != null && eval.first.discountAmount > 0L) {
+                    Triple(rec, cfg, eval.first.discountAmount)
+                } else null
+            }
+            .sortedWith(
+                compareByDescending<Triple<CatalogRecord, PromoConfig, Long>> { it.third }
+                    .thenByDescending { it.second.priority }
+            )
+            .map { it.first }
+    }
+
+    /**
      * Master POS Promo Evaluation Engine:
      * - Checks branch, date, day of week, Happy Hour window, quota, and product/subtotal rules.
      * - Automatically applies the best promo (or stackable combination) when `selectedPromoId == "AUTO"`.

@@ -142,8 +142,7 @@ object WaffleoSeedData {
             priceGrabFood = 17000L,
             priceGoFood = 17000L,
             priceShopeeFood = 17500L,
-            costPerUnit = 6000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -157,8 +156,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -172,8 +170,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -187,8 +184,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -202,8 +198,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -217,8 +212,7 @@ object WaffleoSeedData {
             priceGrabFood = 24000L,
             priceGoFood = 24000L,
             priceShopeeFood = 26000L,
-            costPerUnit = 8500L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -232,8 +226,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -247,8 +240,7 @@ object WaffleoSeedData {
             priceGrabFood = 22500L,
             priceGoFood = 22500L,
             priceShopeeFood = 24000L,
-            costPerUnit = 8000L,
-            metadataJson = """{"subCategory":"Spread","series":"Spread","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":35},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Spread","series":"Spread"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -262,8 +254,7 @@ object WaffleoSeedData {
             priceGrabFood = 25000L,
             priceGoFood = 25000L,
             priceShopeeFood = 27000L,
-            costPerUnit = 9000L,
-            metadataJson = """{"subCategory":"Crunchy","series":"Crunchy","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":40},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Crunchy","series":"Crunchy"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -277,8 +268,7 @@ object WaffleoSeedData {
             priceGrabFood = 25000L,
             priceGoFood = 25000L,
             priceShopeeFood = 27000L,
-            costPerUnit = 9000L,
-            metadataJson = """{"subCategory":"Crunchy","series":"Crunchy","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":40},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Crunchy","series":"Crunchy"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -292,8 +282,7 @@ object WaffleoSeedData {
             priceGrabFood = 31500L,
             priceGoFood = 31500L,
             priceShopeeFood = 34000L,
-            costPerUnit = 11000L,
-            metadataJson = """{"subCategory":"Premium","series":"Premium","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":45},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Premium","series":"Premium"}""",
             isActive = true
         ),
         CatalogRecord(
@@ -307,8 +296,7 @@ object WaffleoSeedData {
             priceGrabFood = 45000L,
             priceGoFood = 45000L,
             priceShopeeFood = 48000L,
-            costPerUnit = 15500L,
-            metadataJson = """{"subCategory":"Premium","series":"Premium","recipe":[{"ingredient":"Tepung Premix Waffleo","qty":120},{"ingredient":"Telur Ayam Segar","qty":1},{"ingredient":"Susu Fresh Milk","qty":80},{"ingredient":"Topping & Saus Premium","qty":50},{"ingredient":"Paper Tray & Cup Waffleo","qty":1}]}""",
+            metadataJson = """{"subCategory":"Premium","series":"Premium"}""",
             isActive = true
         ),
 
@@ -324,7 +312,6 @@ object WaffleoSeedData {
             priceGrabFood = 18750L,
             priceGoFood = 18750L,
             priceShopeeFood = 20000L,
-            costPerUnit = 6000L,
             metadataJson = """{"subCategory":"Coffee","type":"Coffee"}""",
             isActive = true
         ),
@@ -339,7 +326,6 @@ object WaffleoSeedData {
             priceGrabFood = 20000L,
             priceGoFood = 20000L,
             priceShopeeFood = 22000L,
-            costPerUnit = 6500L,
             metadataJson = """{"subCategory":"Coffee","type":"Coffee"}""",
             isActive = true
         ),
@@ -354,7 +340,6 @@ object WaffleoSeedData {
             priceGrabFood = 25000L,
             priceGoFood = 25000L,
             priceShopeeFood = 27000L,
-            costPerUnit = 7800L,
             metadataJson = """{"subCategory":"Coffee","type":"Coffee"}""",
             isActive = true
         ),
@@ -369,7 +354,6 @@ object WaffleoSeedData {
             priceGrabFood = 25000L,
             priceGoFood = 25000L,
             priceShopeeFood = 27000L,
-            costPerUnit = 7800L,
             metadataJson = """{"subCategory":"Coffee","type":"Coffee"}""",
             isActive = true
         ),
@@ -384,7 +368,6 @@ object WaffleoSeedData {
             priceGrabFood = 18750L,
             priceGoFood = 18750L,
             priceShopeeFood = 20000L,
-            costPerUnit = 6000L,
             metadataJson = """{"subCategory":"Non-Coffee","type":"Non-Coffee"}""",
             isActive = true
         ),
@@ -399,7 +382,6 @@ object WaffleoSeedData {
             priceGrabFood = 18750L,
             priceGoFood = 18750L,
             priceShopeeFood = 20000L,
-            costPerUnit = 6200L,
             metadataJson = """{"subCategory":"Non-Coffee","type":"Non-Coffee"}""",
             isActive = true
         ),
@@ -414,7 +396,6 @@ object WaffleoSeedData {
             priceGrabFood = 25000L,
             priceGoFood = 25000L,
             priceShopeeFood = 27000L,
-            costPerUnit = 8000L,
             metadataJson = """{"subCategory":"Non-Coffee","type":"Non-Coffee"}""",
             isActive = true
         ),
@@ -448,7 +429,7 @@ object WaffleoSeedData {
         CatalogRecord(id = "ice_noice", userId = userId, recordType = "MODIFIER", branchId = "Global", name = "No Ice (Tetap Dingin)", category = "Ice Level", isActive = true),
         CatalogRecord(id = "ice_warm", userId = userId, recordType = "MODIFIER", branchId = "Global", name = "Warm / Hangat", category = "Ice Level", isActive = true),
 
-        // --- INGREDIENTS & PROMOS (DIKOSONGKAN SESUAI INSTRUKSI USER) ---
+        // --- PROMOS (DIKOSONGKAN SESUAI INSTRUKSI USER) ---
 
 
         // --- PLATFORM FEE & BCA SETTLEMENT CONFIGS (CABANG GLOBAL) ---

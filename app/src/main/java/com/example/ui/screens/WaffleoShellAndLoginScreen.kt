@@ -107,7 +107,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -125,6 +127,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.BuildConfig
 import com.example.R
+import com.example.data.model.capitalizeSentenceStart
 import com.example.ui.components.WaffleoProductIllustration
 import com.example.ui.components.WaffleoSingleSelectDropdown
 import com.example.ui.components.WaffleoSoftTextField
@@ -358,7 +361,7 @@ fun GoogleCloudAuthScreen(
                             color = RichEspressoPrimary
                         )
                         Text(
-                            text = "• Seluruh perubahan pesanan, harga menu, dan stok tercatat pada Cloud Audit Log",
+                            text = "• Seluruh perubahan pesanan dan harga menu tercatat pada Cloud Audit Log",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MutedCocoaText
                         )
@@ -1319,7 +1322,7 @@ fun WaffleoLandscapeMainShell(
                 modifier = Modifier
                     .width(if (isStoreOpen) 540.dp else 380.dp)
                     .wrapContentHeight()
-                    .heightIn(max = if (isStoreOpen) 600.dp else 420.dp)
+                    .heightIn(max = if (isStoreOpen) 640.dp else 420.dp)
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 Column(
@@ -1330,7 +1333,7 @@ fun WaffleoLandscapeMainShell(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Scrollable Content Area (Header + Rekapitulasi Income)
+                    // Scrollable Content Area (Header + Rekapitulasi Income + Data Lainnya)
                     Column(
                         modifier = Modifier
                             .weight(1f, fill = false)
@@ -2333,19 +2336,21 @@ fun CreateNewBranchDialog(
                     WaffleoSoftTextField(
                         value = branchName,
                         onValueChange = {
-                            branchName = it
+                            branchName = capitalizeSentenceStart(it)
                             errorMessage = null
                         },
                         label = "Nama Cabang",
                         placeholder = "Contoh: Kemang / Tebet",
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.weight(1f),
                         testTag = "new_branch_name_input"
                     )
                     WaffleoSoftTextField(
                         value = location,
-                        onValueChange = { location = it },
+                        onValueChange = { location = capitalizeSentenceStart(it) },
                         label = "Lokasi / Alamat Cabang",
                         placeholder = "Jl. Kemang Raya No. 12...",
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.weight(1f),
                         testTag = "new_branch_location_input"
                     )
@@ -2355,9 +2360,10 @@ fun CreateNewBranchDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     WaffleoSoftTextField(
                         value = ownerName,
-                        onValueChange = { ownerName = it },
+                        onValueChange = { ownerName = capitalizeSentenceStart(it) },
                         label = "Nama Pemilik (Owner)",
                         placeholder = "Nama lengkap pemilik...",
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.weight(1f),
                         testTag = "new_branch_owner_name_input"
                     )
